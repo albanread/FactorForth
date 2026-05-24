@@ -92,9 +92,29 @@ impl std::fmt::Display for Effect {
     }
 }
 
+/// An effect-related diagnostic.  These are *warnings*, not errors:
+/// the compile still produces IR (with the synthesised effect, which
+/// is correct by construction).  Forth's culture is permissive about
+/// ambiguous shapes; we surface the issue in the IDE / CLI without
+/// blocking the build.
+///
+/// Three reasons we keep the historical `EffectError` name even
+/// though they're warnings:
+///   1. The data shape (a mismatch / an ambiguity) is unchanged.
+///   2. Code that holds these in a `Vec` already exists.
+///   3. The CLI's stderr renderer can apply severity per-variant
+///      without us reshuffling the type tree.
+///
+/// If we ever introduce *fatal* effect issues (e.g., a stack-effect
+/// declaration that the user explicitly asks to be enforced),
+/// extend with a severity field.  For now everything here is a
+/// warning.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EffectError {
-    /// Body's inferred effect doesn't match the declared annotation.
+    /// Declared `( -- )`-style annotation doesn't match the body's
+    /// inferred behaviour.  The synth is authoritative; the
+    /// declaration is treated as documentation that's drifted from
+    /// the code.
     Mismatch {
         name: String,
         at: Span,
@@ -109,7 +129,7 @@ impl std::fmt::Display for EffectError {
             EffectError::Mismatch { name, at, declared, inferred } => {
                 write!(
                     f,
-                    "`{name}` at {at}: declared ( -- {} item{}) but body produces ( -- {} item{})",
+                    "warning: `{name}` at {at}: declared ( -- {} item{}) but body produces ( -- {} item{})",
                     declared.1, if declared.1 == 1 { "" } else { "s " },
                     inferred.1, if inferred.1 == 1 { "" } else { "s " },
                 )?;
@@ -198,10 +218,17 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
 /// Result of running effect inference over a whole program.
 #[derive(Clone, Debug)]
 pub struct Inferred {
-    /// Per-definition effect (declared if present, else inferred from
-    /// body; `Unknown` if the body contains control flow we don't yet
-    /// model).  Keyed by lowercase ANS name.
+    /// Per-name effect, keyed by lowercase ANS name.  This is the
+    /// effect callers should TYPE THEMSELVES AGAINST: declared when
+    /// present (chicken-and-egg for mutual recursion), inferred
+    /// when no annotation, Unknown when neither says anything.
     pub user_effects: HashMap<String, Effect>,
+    /// Per-name body-derived effect.  This is the GROUND TRUTH from
+    /// walking the body — independent of the declared annotation.
+    /// Use this when deciding which annotation to emit (synth wins
+    /// over a wrong user declaration).  Missing if the body was
+    /// never inferred (e.g., for variables/constants).
+    pub body_effects: HashMap<String, Effect>,
 }
 
 /// Run inference + checking over a resolved program.  Returns the
@@ -245,6 +272,7 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
     }
 
     let mut errors: Vec<EffectError> = Vec::new();
+    let mut body_effects: HashMap<String, Effect> = HashMap::new();
 
     // Pass 2: infer each definition's body and compare against
     // declared (if any).  Build an Env locally per iteration so the
@@ -261,13 +289,15 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
                             resolved: r };
             infer_block(&d.body, &env)
         };
+        let lc = d.name.to_ascii_lowercase();
+        body_effects.insert(lc.clone(), body_eff);
         check_definition(d, body_eff, &mut errors);
         if d.effect.is_none() {
-            user_effects.insert(d.name.to_ascii_lowercase(), body_eff);
+            user_effects.insert(lc, body_eff);
         }
     }
 
-    (Inferred { user_effects }, errors)
+    (Inferred { user_effects, body_effects }, errors)
 }
 
 struct Env<'a> {

@@ -222,33 +222,65 @@ fn emit_constant(c: &ConstantDef, out: &mut String) {
 
 fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
     write!(out, ": {} ", d.name).unwrap();
-    // Factor's `:` REQUIRES a stack-effect annotation.  Three cases:
-    //   1. User declared one — emit it verbatim (item names too).
-    //   2. User didn't, but our effect inference produced a known
-    //      effect — synthesise a generic `( a b -- c )`-style
-    //      annotation with the right counts.
-    //   3. Neither — emit `( ..a -- ..b )`, the row-variable form
-    //      that means "any effect", which Factor accepts as
-    //      sufficiently liberal.
-    if let Some(eff) = &d.effect {
+    // Factor's `:` REQUIRES a stack-effect annotation.  Picking
+    // which one to emit follows the principle that synth is
+    // authoritative (it's derived from the body, so it's correct
+    // by construction) while the user's declaration carries
+    // documentation value (names like `n^2`, `c-addr`) that the
+    // synth can't recover.
+    //
+    // Decision table:
+    //
+    //   declared    synth         emit
+    //   ─────────   ─────────     ────────────────────────────────
+    //   present     Known, match  declared  (synth confirms; keep names)
+    //   present     Known, ≠      synth     (synth wins; counts correct)
+    //   present     Unknown       declared  (synth can't speak; trust user)
+    //   absent      Known         synth     (synthesise from body)
+    //   absent      Unknown       row-vars  (give up; accept any)
+    let lc = d.name.to_ascii_lowercase();
+    // `body_effects` is the body-walk truth, separate from
+    // `user_effects` which is the caller's view (declared if
+    // present).  We want truth here, not the user's possibly-stale
+    // claim.
+    let synth = r.body_effects.get(&lc).copied();
+    let declared_counts = d.effect.as_ref()
+        .map(|e| (e.inputs.len() as u32, e.outputs.len() as u32));
+
+    let emit_synth = |out: &mut String, inputs: u32, outputs: u32| {
+        synth_effect_annotation(inputs, outputs, out);
+    };
+    let emit_declared = |out: &mut String| {
+        let eff = d.effect.as_ref().unwrap();
         out.push('(');
         for s in &eff.inputs { out.push(' '); out.push_str(s); }
         if eff.inputs.is_empty() { out.push(' '); }
         out.push_str(" --");
         for s in &eff.outputs { out.push(' '); out.push_str(s); }
         out.push_str(" ) ");
-    } else {
-        let lc = d.name.to_ascii_lowercase();
-        match r.user_effects.get(&lc).copied() {
-            Some(super::effect::Effect::Known { inputs, outputs }) => {
-                synth_effect_annotation(inputs, outputs, out);
-            }
-            _ => {
-                // Inference said Unknown (control flow inside) or
-                // wasn't run.  Row variables let Factor's parser
-                // accept any body.
-                out.push_str("( ..a -- ..b ) ");
-            }
+    };
+
+    match (declared_counts, synth) {
+        (Some((di, do_)), Some(super::effect::Effect::Known { inputs, outputs }))
+            if di == inputs && do_ == outputs =>
+        {
+            // Counts match — emit user's annotation with names.
+            emit_declared(out);
+        }
+        (Some(_), Some(super::effect::Effect::Known { inputs, outputs })) => {
+            // Declared but synth says different.  Synth wins.
+            // The diagnostic for the mismatch is already in sema.
+            emit_synth(out, inputs, outputs);
+        }
+        (Some(_), _) => {
+            // Synth is Unknown; declared is best we have.
+            emit_declared(out);
+        }
+        (None, Some(super::effect::Effect::Known { inputs, outputs })) => {
+            emit_synth(out, inputs, outputs);
+        }
+        (None, _) => {
+            out.push_str("( ..a -- ..b ) ");
         }
     }
     emit_exprs(&d.body, r, out);

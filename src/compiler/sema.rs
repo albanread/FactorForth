@@ -111,7 +111,13 @@ pub struct Sema {
     pub constants: BTreeMap<String, ConstantDef>,
 
     // ── From effect ──────────────────────────────────────────────
+    /// Callers' view of a word's effect: declared if present, else
+    /// inferred, else Unknown.  Use for typing other words.
     pub user_effects:  HashMap<String, Effect>,
+    /// Body-derived effect — the ground truth from walking the
+    /// definition's body.  Use to decide which annotation to emit
+    /// when the user's declaration is potentially wrong.
+    pub body_effects:  HashMap<String, Effect>,
     pub effect_errors: Vec<EffectError>,
 
     // ── From sema::analyse ───────────────────────────────────────
@@ -180,6 +186,7 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
         variables,
         constants,
         user_effects: inferred.user_effects,
+        body_effects: inferred.body_effects,
         effect_errors,
         call_graph: BTreeMap::new(),
         use_sites: BTreeMap::new(),

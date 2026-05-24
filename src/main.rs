@@ -162,10 +162,11 @@ fn run() -> Result<(), String> {
         _ => {}
     }
 
-    // Effect errors are real errors — fail the compile rather than
-    // emit possibly-bad IR.  Same behaviour as compile().
-    if let Some(first) = sema.effect_errors.first() {
-        return Err(first.to_string());
+    // Effect diagnostics are warnings: surface to stderr but keep
+    // going.  The IR uses the synth annotation, which is correct
+    // by construction regardless of what the user declared.
+    for w in &sema.effect_errors {
+        eprintln!("newfactor: {w}");
     }
 
     let ir = emit(&sema, &EmitOpts::default());

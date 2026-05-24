@@ -68,3 +68,10 @@ in six months).
   global via a peep-emit, wide gets a backing nf-addr.  The
   `+!` argument-order gotcha (change-global's signature is
   variable-then-quot) cost one debug cycle.
+- `2026-05-24-effects-as-warnings.md` — the design pivot:
+  synth-from-body is the ground truth, user's annotation is
+  documentation, mismatches are warnings.  Control-flow effect
+  formulas land (IF/THEN, IF/ELSE/THEN, BEGIN/UNTIL,
+  BEGIN/WHILE/REPEAT, DO/LOOP).  Two separate effect maps in
+  Sema: `user_effects` for caller typing, `body_effects` for
+  ground truth.

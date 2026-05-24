@@ -41,28 +41,41 @@ pub use sema::{build as build_sema, EscapeReason, EscapeState, Sema, UserWord};
 
 /// Top-level convenience: ANS Forth source string → Factor IR string.
 ///
-/// Pipeline: lex → parse → resolve → effect-check → emit.  Errors
-/// stringify via each stage's `Display`.  Returns the IR ready to
-/// feed to `nf_eval_string`.
+/// Pipeline: lex → parse → sema (resolve + effect + escape) → emit.
+/// Errors stringify via each stage's `Display`.  Returns the IR
+/// ready to feed to `nf_eval_string`.
 ///
-/// Effect mismatches (M2.7) are hard errors here — a declared
-/// `( a -- b )` that doesn't match the body's behaviour stops the
-/// compile.  Bodies containing control flow currently yield an
-/// `Effect::Unknown` for which no check is performed; the declared
-/// annotation is trusted for caller-side typing.
+/// **Effect diagnostics are warnings, not errors.**  A declared
+/// `( a -- b )` annotation that doesn't match the body's inferred
+/// behaviour produces a `Mismatch` in `sema.effect_errors` but the
+/// compile still emits valid IR — with the synthesised effect,
+/// which is correct by construction.  Callers (the CLI, the
+/// future IDE) decide whether to surface, ignore, or escalate.
+/// This matches Forth's permissive culture: the user can write
+/// programs whose effects are ambiguous on purpose; we tell them
+/// what we see and let them proceed.
+///
+/// Use [`compile_with_diagnostics`] when you want to see the
+/// warnings programmatically.  This function discards them.
 ///
 /// This is the simplest possible driver — Phase 3 will wrap it in
 /// a `Session` that owns the embedded VM and supports incremental
 /// `compile_and_eval` calls with carry-over state.
 pub fn compile(source: &str) -> Result<String, String> {
+    compile_with_diagnostics(source).map(|(ir, _warnings)| ir)
+}
+
+/// Compile and return the IR plus any effect-diagnostic warnings.
+/// Stage errors (lex, parse, resolve) are still hard failures —
+/// they prevent us from producing any IR at all.  Effect issues
+/// are not: the synth produces correct IR regardless.
+pub fn compile_with_diagnostics(
+    source: &str,
+) -> Result<(String, Vec<EffectError>), String> {
     let toks = lex(source).map_err(|e| e.to_string())?;
     let prog = parse(&toks).map_err(|e| e.to_string())?;
     let sema = build_sema(prog).map_err(|e| e.to_string())?;
-    if let Some(first) = sema.effect_errors.first() {
-        // Report the first; subsequent ones often cascade from the
-        // first and would distract the user.  Future work: collect
-        // up to N and present a summary.
-        return Err(first.to_string());
-    }
-    Ok(emit(&sema, &EmitOpts::default()))
+    let warnings = sema.effect_errors.clone();
+    let ir = emit(&sema, &EmitOpts::default());
+    Ok((ir, warnings))
 }
