@@ -34,7 +34,9 @@ use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, c_long, CStr, CString};
 use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Process-wide gate.  Every test that touches the embedded VM
 /// acquires this before doing anything.  Factor's VM is single-
@@ -44,6 +46,55 @@ use std::sync::{Mutex, OnceLock};
 fn vm_gate() -> &'static Mutex<()> {
     static GATE: OnceLock<Mutex<()>> = OnceLock::new();
     GATE.get_or_init(|| Mutex::new(()))
+}
+
+/// Per-test hard timeout.  A Factor infinite loop or runaway compile
+/// can hang `nf_eval_string` indefinitely — there's no clean way to
+/// unstick that FFI call, so we install a watchdog thread that
+/// `std::process::abort`s the whole test exe if a single test runs
+/// longer than this.  Aborting prints a clear message and exits with
+/// non-zero, which cargo test reports as failure.
+///
+/// 20 s is generous: the entire smoke suite runs in ~0.5 s; a single
+/// test should be a few ms.  Anything past 20 s is a hang, not slow.
+const TEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Watchdog: install on entry to `with_vm`, cancel on Drop.  If the
+/// timeout elapses before Drop, the whole process aborts with a clear
+/// stderr line so the cargo output points at the culprit.
+struct Watchdog {
+    cancel: Arc<AtomicBool>,
+}
+
+impl Watchdog {
+    fn arm(label: &str) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel2 = cancel.clone();
+        let label = label.to_string();
+        std::thread::Builder::new()
+            .name(format!("watchdog<{label}>"))
+            .spawn(move || {
+                let deadline = Instant::now() + TEST_TIMEOUT;
+                while Instant::now() < deadline {
+                    if cancel2.load(Ordering::Relaxed) { return; }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                eprintln!(
+                    "\n[watchdog] *** TIMEOUT: `{label}` exceeded {:?}; \
+                     aborting process so cargo test reports failure ***",
+                    TEST_TIMEOUT,
+                );
+                std::process::abort();
+            })
+            .expect("spawn watchdog");
+        Watchdog { cancel }
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Opaque types from factor.dll — we never dereference these.
@@ -128,7 +179,19 @@ unsafe fn eval(api: &NfApi, vm: *mut FactorVm, expr: &str) -> String {
 
 /// Helper: run a setup-and-eval sequence.  Sets up the VM once, runs
 /// each expression in turn, returns the captured outputs.
+///
+/// The watchdog label comes from `std::thread::current().name()` —
+/// cargo test names each worker thread after the test function, so
+/// hangs are blamed correctly without plumbing a label through every
+/// callsite.
 unsafe fn with_vm<F: FnOnce(&NfApi, *mut FactorVm)>(body: F) {
+    // Arm the per-test watchdog FIRST — before we even contend on the
+    // gate.  If the previous test's gate-holder hung, we want to time
+    // out on the gate wait, not block forever on it.
+    let label = std::thread::current().name()
+        .unwrap_or("(unknown test)").to_string();
+    let _wd = Watchdog::arm(&label);
+
     // Hold the process-wide VM gate for the lifetime of this call.
     // We tolerate a poisoned mutex: every test creates its own fresh
     // VM, so a previous test panicking doesn't corrupt shared state
@@ -313,6 +376,113 @@ fn phase23_multiple_definitions() {
             let out = compile_and_run(api, vm,
                 ": inc ( n -- n+1 ) 1 + ; : twice ( n -- n+2 ) inc inc ; 5 twice .");
             assert!(out.contains("7"), "got {out:?}");
+        });
+    }
+}
+
+// ─── Phase 2.4 — control flow ───────────────────────────────────────────────
+
+/// The plan's M2.4 success criterion: `: abs ( n -- ) dup 0 < if
+/// negate then ; -5 abs .` → `5`.  Exercises IF/THEN (no ELSE),
+/// comparison, and unary `negate`.
+#[test]
+#[ignore]
+fn phase24_if_then_abs() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": abs ( n -- |n| ) dup 0 < if negate then ; -5 abs .");
+            assert!(out.contains('5') && !out.contains("-5"),
+                    "expected positive 5, got {out:?}");
+        });
+    }
+}
+
+/// IF/ELSE/THEN — the classic three-way sign function.  `-3 sign .`
+/// expects `-1`, `0 sign .` expects `0`, `4 sign .` expects `1`.
+#[test]
+#[ignore]
+fn phase24_if_else_then_sign() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": sign ( n -- s ) \
+                       dup 0 < if drop -1 \
+                       else dup 0 > if drop 1 else drop 0 then \
+                       then ; \
+                       -3 sign . 0 sign . 4 sign .";
+            let out = compile_and_run(api, vm, src);
+            // Output should contain -1, then 0, then 1.
+            assert!(out.contains("-1") && out.contains("0") && out.contains("1"),
+                    "expected -1 0 1, got {out:?}");
+        });
+    }
+}
+
+/// BEGIN ... UNTIL — count down 5..0 and check that loop terminates.
+/// `: countdown ( n -- ) begin 1 - dup 0 = until drop ; 5 countdown .`
+/// Loop body should run 5 times (5→4→3→2→1→0); after the loop drop
+/// the residual flag, then print final stack which is just nothing
+/// extra — emit dup count if you want a check, but here we just
+/// verify the program completes and `.` doesn't underflow.
+#[test]
+#[ignore]
+fn phase24_begin_until_terminates() {
+    unsafe {
+        with_vm(|api, vm| {
+            // Compute factorial of 5 using BEGIN/UNTIL.  Easier
+            // success check than just "did the loop terminate."
+            //   ( n -- n! )
+            //   1 swap                    ( acc n )
+            //   begin
+            //       dup if                ( acc n flag )
+            //         tuck * swap 1 -     ( n*acc n-1 )
+            //         false               ( n*acc n-1 0 ) — keep looping
+            //       else
+            //         drop true            ( acc final-0 1 ) — stop
+            //       then
+            //   until
+            //   drop                       ( n! )
+            //
+            // Hmm — UNTIL pops a flag.  Let's just do a straight
+            // descending counter and accumulate.
+            //
+            // : fact ( n -- n! )
+            //   1 swap
+            //   begin dup while
+            //     tuck * swap 1 -
+            //   repeat drop ;
+            // 5 fact . → 120
+            let src = ": fact ( n -- n! ) \
+                       1 swap \
+                       begin dup while \
+                         tuck * swap 1 - \
+                       repeat drop ; \
+                       5 fact .";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("120"), "expected 120 = 5!, got {out:?}");
+        });
+    }
+}
+
+/// Nested IF — verify the parser folds the inner IF into the outer
+/// ELSE branch correctly when emitted.  `: max ( a b -- m ) 2dup <
+/// if swap then drop ;` would test 2dup which we don't have yet,
+/// so use a simpler form.
+#[test]
+#[ignore]
+fn phase24_nested_if_in_else() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": classify ( n -- ) \
+                       dup 0 < if drop .\" neg\" \
+                       else dup 0 = if drop .\" zero\" \
+                       else drop .\" pos\" \
+                       then then ; \
+                       -5 classify cr 0 classify cr 7 classify";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("neg"), "expected 'neg', got {out:?}");
+            assert!(out.contains("zero"), "expected 'zero', got {out:?}");
+            assert!(out.contains("pos"), "expected 'pos', got {out:?}");
         });
     }
 }

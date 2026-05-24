@@ -117,6 +117,28 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("mod",  Builtin { vocab: "math", factor_name: "mod" }),
         ("negate", Builtin { vocab: "math", factor_name: "neg" }),
 
+        // Comparisons.  ANS returns -1/0; Factor returns t/f.
+        // `IF` works on Factor's truthy semantics (anything-not-f is
+        // true), so comparisons that feed straight into `IF` flow
+        // without conversion.  If user code stores a flag and uses
+        // it as a numeric value later, M2.7's effect inference flags
+        // that case for a later `flag>` insertion.
+        ("=",   Builtin { vocab: "kernel",     factor_name: "=" }),
+        ("<>",  Builtin { vocab: "kernel",     factor_name: "/=" }),
+        ("<",   Builtin { vocab: "math.order", factor_name: "<"  }),
+        (">",   Builtin { vocab: "math.order", factor_name: ">"  }),
+        ("<=",  Builtin { vocab: "math.order", factor_name: "<=" }),
+        (">=",  Builtin { vocab: "math.order", factor_name: ">=" }),
+        ("0=",  Builtin { vocab: "math",       factor_name: "zero?" }),
+        ("0<",  Builtin { vocab: "math.order", factor_name: "neg?" }),
+        ("0>",  Builtin { vocab: "math.order", factor_name: "pos?" }),
+
+        // Bitwise (ANS AND/OR/XOR/NOT are bitwise, not logical).
+        ("and", Builtin { vocab: "math.bitwise", factor_name: "bitand" }),
+        ("or",  Builtin { vocab: "math.bitwise", factor_name: "bitor"  }),
+        ("xor", Builtin { vocab: "math.bitwise", factor_name: "bitxor" }),
+        ("invert", Builtin { vocab: "math.bitwise", factor_name: "bitnot" }),
+
         // I/O — `.` collides with prettyprint, so always FQ
         (".",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "." }),
         ("cr", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cr" }),
@@ -206,6 +228,20 @@ fn resolve_exprs(
                         name: name.clone(), at: *span,
                     });
                 }
+            }
+            Expr::If { then_body, else_body, .. } => {
+                resolve_exprs(then_body, builtins, user_words, out)?;
+                if let Some(eb) = else_body {
+                    resolve_exprs(eb, builtins, user_words, out)?;
+                }
+            }
+            Expr::BeginUntil { body, .. } |
+            Expr::BeginAgain { body, .. } => {
+                resolve_exprs(body, builtins, user_words, out)?;
+            }
+            Expr::BeginWhileRepeat { pred, body, .. } => {
+                resolve_exprs(pred, builtins, user_words, out)?;
+                resolve_exprs(body, builtins, user_words, out)?;
             }
         }
     }

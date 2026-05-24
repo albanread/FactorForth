@@ -42,6 +42,19 @@ pub enum ParseError {
     /// it as a comment and warn out-of-band).  This variant is for
     /// `( -- -- )` style errors.
     MalformedStackEffect { at: Span, reason: &'static str },
+
+    /// A control-flow terminator (ELSE, THEN, UNTIL, WHILE, REPEAT,
+    /// AGAIN) appeared without its matching opener.  Carries the
+    /// stray keyword and its span.
+    StrayControlWord { word: String, at: Span },
+
+    /// EOF reached inside a control-flow block waiting for one of
+    /// `expected` terminators.
+    UnterminatedControl {
+        opener: String,
+        opened_at: Span,
+        expected: &'static [&'static str],
+    },
 }
 
 impl std::fmt::Display for ParseError {
@@ -57,6 +70,16 @@ impl std::fmt::Display for ParseError {
                 write!(f, "unterminated `:` definition opened at {opened_at}"),
             ParseError::MalformedStackEffect { at, reason } =>
                 write!(f, "malformed stack effect at {at}: {reason}"),
+            ParseError::StrayControlWord { word, at } =>
+                write!(f, "stray `{word}` at {at}: no matching opener"),
+            ParseError::UnterminatedControl { opener, opened_at, expected } => {
+                write!(f, "unterminated `{opener}` opened at {opened_at}; expected one of: ")?;
+                for (i, e) in expected.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "`{e}`")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -219,22 +242,143 @@ impl<'t> Parser<'t> {
         })
     }
 
-    /// Parse a single expression: literal or word-ref.  Caller has
-    /// already filtered out `:`, `;`, and comments.
+    /// Parse a single expression: literal, word-ref, or a structured
+    /// control-flow block.  Caller has already filtered out `:`, `;`,
+    /// and (at the outer level) terminators.  When we encounter a
+    /// stray terminator here, that's an error — the parent should
+    /// have caught it via `parse_block_until`.
     fn expr_one(&mut self) -> Result<Expr, ParseError> {
-        let t = self.bump().expect("expr_one called at EOF");
+        // Peek first to handle control-flow openers; only bump on
+        // simple expressions.
+        let t = self.peek().expect("expr_one called at EOF");
+        let t_span = t.span;
         match &t.kind {
-            Tok::Int { value, .. } => Ok(Expr::Lit(Literal::Int { value: *value, span: t.span })),
-            Tok::Float { value, .. } => Ok(Expr::Lit(Literal::Float { value: *value, span: t.span })),
-            Tok::Str { value, kind } => Ok(Expr::Lit(Literal::Str {
-                value: value.clone(), kind: *kind, span: t.span,
-            })),
-            Tok::Word(w) => Ok(Expr::WordRef { name: w.clone(), span: t.span }),
-            // Comments and unknown tokens shouldn't reach here.
+            Tok::Int { value, .. } => {
+                let v = *value; self.bump();
+                Ok(Expr::Lit(Literal::Int { value: v, span: t_span }))
+            }
+            Tok::Float { value, .. } => {
+                let v = *value; self.bump();
+                Ok(Expr::Lit(Literal::Float { value: v, span: t_span }))
+            }
+            Tok::Str { value, kind } => {
+                let v = value.clone(); let k = *kind; self.bump();
+                Ok(Expr::Lit(Literal::Str { value: v, kind: k, span: t_span }))
+            }
+            Tok::Word(w) => {
+                let lc = w.to_ascii_lowercase();
+                match lc.as_str() {
+                    "if"    => { self.bump(); self.parse_if(t_span) }
+                    "begin" => { self.bump(); self.parse_begin(t_span) }
+                    // Terminators leaking through to here means they
+                    // weren't inside a matching opener.
+                    "else" | "then" | "until" | "while" | "repeat" | "again" => {
+                        Err(ParseError::StrayControlWord {
+                            word: lc, at: t_span,
+                        })
+                    }
+                    _ => {
+                        let name = w.clone(); self.bump();
+                        Ok(Expr::WordRef { name, span: t_span })
+                    }
+                }
+            }
             Tok::LineComment(_) | Tok::BlockComment(_) => {
-                // Defensive: skip and retry.
+                self.bump();
                 self.expr_one()
             }
+        }
+    }
+
+    /// Parse the body of `IF ... [ELSE ...] THEN`.  Caller has already
+    /// consumed the `if` token at `if_span`.
+    fn parse_if(&mut self, if_span: Span) -> Result<Expr, ParseError> {
+        let (then_body, term) = self.parse_block_until(
+            "if", if_span, &["else", "then"],
+        )?;
+        let term_word = match &term.kind {
+            Tok::Word(w) => w.to_ascii_lowercase(),
+            _ => unreachable!("parse_block_until only returns word terminators"),
+        };
+        let (else_body, end_span) = if term_word == "else" {
+            let (eb, then_tok) = self.parse_block_until("else", term.span, &["then"])?;
+            (Some(eb), then_tok.span)
+        } else {
+            (None, term.span)
+        };
+        Ok(Expr::If {
+            then_body, else_body,
+            span: Span { start: if_span.start, end: end_span.end },
+        })
+    }
+
+    /// Parse `BEGIN ... (UNTIL | AGAIN | WHILE ... REPEAT)`.  Caller
+    /// has consumed the `begin` token at `begin_span`.
+    fn parse_begin(&mut self, begin_span: Span) -> Result<Expr, ParseError> {
+        let (body, term) = self.parse_block_until(
+            "begin", begin_span, &["until", "again", "while"],
+        )?;
+        let term_word = match &term.kind {
+            Tok::Word(w) => w.to_ascii_lowercase(),
+            _ => unreachable!(),
+        };
+        let span = Span { start: begin_span.start, end: term.span.end };
+        match term_word.as_str() {
+            "until" => Ok(Expr::BeginUntil { body, span }),
+            "again" => Ok(Expr::BeginAgain { body, span }),
+            "while" => {
+                // What we parsed before WHILE is the predicate.
+                // Now parse the body up to REPEAT.
+                let (loop_body, repeat_tok) =
+                    self.parse_block_until("while", term.span, &["repeat"])?;
+                Ok(Expr::BeginWhileRepeat {
+                    pred: body, body: loop_body,
+                    span: Span { start: begin_span.start, end: repeat_tok.span.end },
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Parse a sequence of expressions until we encounter one of
+    /// `terminators` at this nesting level (recursive openers like
+    /// nested IFs / BEGINs are absorbed by `expr_one`).  Returns
+    /// the parsed body and the *consumed* terminator token.
+    fn parse_block_until(
+        &mut self,
+        opener: &str,
+        opened_at: Span,
+        terminators: &'static [&'static str],
+    ) -> Result<(Vec<Expr>, &'t Token), ParseError> {
+        let mut body: Vec<Expr> = Vec::new();
+        loop {
+            self.skip_comments();
+            let t = match self.peek() {
+                Some(t) => t,
+                None => return Err(ParseError::UnterminatedControl {
+                    opener: opener.to_string(),
+                    opened_at,
+                    expected: terminators,
+                }),
+            };
+            if let Tok::Word(w) = &t.kind {
+                let lc = w.to_ascii_lowercase();
+                if terminators.iter().any(|s| *s == lc) {
+                    let term = self.bump().unwrap();
+                    return Ok((body, term));
+                }
+                // `:` and `;` are hard stops — they can't appear
+                // inside a control-flow block.  Re-route to the
+                // appropriate error.
+                if w == ";" {
+                    return Err(ParseError::UnterminatedControl {
+                        opener: opener.to_string(),
+                        opened_at,
+                        expected: terminators,
+                    });
+                }
+            }
+            body.push(self.expr_one()?);
         }
     }
 }
@@ -380,5 +524,96 @@ mod tests {
         assert!(matches!(&d.body[0],
             Expr::Lit(Literal::Str { value, kind: StringKind::DotQuote, .. })
               if value == "hi"));
+    }
+
+    // ── Control-flow parsing (M2.4) ────────────────────────────────
+
+    #[test]
+    fn if_then_no_else() {
+        let prog = parse_str(": abs dup 0 < if negate then ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        // dup 0 < then If
+        assert_eq!(d.body.len(), 4);
+        let Expr::If { then_body, else_body, .. } = &d.body[3] else {
+            panic!("expected If node at end, got {:?}", d.body[3]);
+        };
+        assert!(else_body.is_none());
+        assert_eq!(then_body.len(), 1);
+        assert!(matches!(&then_body[0], Expr::WordRef { name, .. } if name == "negate"));
+    }
+
+    #[test]
+    fn if_else_then() {
+        let prog = parse_str(": sign dup 0 < if drop -1 else drop 1 then ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::If { then_body, else_body, .. } = d.body.last().unwrap() else {
+            panic!("expected If node");
+        };
+        let eb = else_body.as_ref().expect("else branch");
+        assert_eq!(then_body.len(), 2);   // drop -1
+        assert_eq!(eb.len(), 2);          // drop  1
+    }
+
+    #[test]
+    fn nested_if() {
+        let prog = parse_str(": sign dup 0 < if -1 else dup 0 > if 1 else 0 then then ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        // outer IF should have inner IF in else-branch
+        let Expr::If { else_body: Some(eb), .. } = d.body.last().unwrap() else {
+            panic!("outer if missing else");
+        };
+        // eb should contain `dup`, `0`, `>`, inner-IF
+        assert!(eb.iter().any(|e| matches!(e, Expr::If { .. })),
+                "expected nested If in else branch");
+    }
+
+    #[test]
+    fn begin_until() {
+        let prog = parse_str(": countdown begin 1 - dup 0 = until ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::BeginUntil { body, .. } = d.body.last().unwrap() else {
+            panic!("expected BeginUntil");
+        };
+        // 1 - dup 0 =  → five exprs (int, -, dup, int, =)
+        assert_eq!(body.len(), 5);
+    }
+
+    #[test]
+    fn begin_while_repeat() {
+        let prog = parse_str(": foo begin dup 0 > while 1 - repeat ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::BeginWhileRepeat { pred, body, .. } = d.body.last().unwrap() else {
+            panic!("expected BeginWhileRepeat");
+        };
+        assert_eq!(pred.len(), 3);   // dup 0 >
+        assert_eq!(body.len(), 2);   // 1 -
+    }
+
+    #[test]
+    fn begin_again() {
+        let prog = parse_str(": forever begin 1 again ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::BeginAgain { body, .. } = d.body.last().unwrap() else {
+            panic!("expected BeginAgain");
+        };
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn stray_else_rejected() {
+        let err = parse_str(": foo else ;").unwrap_err();
+        assert!(matches!(err, ParseError::StrayControlWord { ref word, .. } if word == "else"));
+    }
+
+    #[test]
+    fn unterminated_if_rejected() {
+        let err = parse_str(": foo if 1 ;").unwrap_err();
+        assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "if"));
+    }
+
+    #[test]
+    fn unterminated_begin_rejected() {
+        let err = parse_str(": foo begin 1 ;").unwrap_err();
+        assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "begin"));
     }
 }

@@ -70,12 +70,49 @@ pub struct StackEffect {
 }
 
 /// An expression — anything that goes inside a definition body, or
-/// at top level.  In Phase 2.2 this is just literals and word refs;
-/// later phases extend it.
+/// at top level.
+///
+/// Phase 2.2 introduced `Lit` and `WordRef`.
+/// Phase 2.4 adds the structured control-flow forms.  The keywords
+/// themselves (`if`, `else`, `then`, `begin`, `until`, `while`,
+/// `repeat`, `again`) are NOT word references — the parser recognises
+/// them as syntax and folds them into these nodes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     Lit(Literal),
     WordRef { name: String, span: Span },
+
+    /// `flag IF then-body [ELSE else-body] THEN`.
+    /// Consumes the flag at runtime; non-zero → then-body, zero →
+    /// else-body (or nothing if absent).  Maps to Factor's
+    /// `[ then ] [ else ] if` combinator (`when` when else is empty).
+    If {
+        then_body: Vec<Expr>,
+        /// `None` when source has no ELSE clause.
+        else_body: Option<Vec<Expr>>,
+        span: Span,
+    },
+
+    /// `BEGIN body flag UNTIL`.
+    /// Loops: execute body, pop flag, if flag = 0 loop back to BEGIN.
+    /// Equivalently: continue while flag is false.
+    BeginUntil { body: Vec<Expr>, span: Span },
+
+    /// `BEGIN pred WHILE body REPEAT`.
+    /// Loops: execute pred (must leave a flag), pop flag, if flag is
+    /// true execute body and loop, else exit.  Maps directly to
+    /// Factor's `[ pred ] [ body ] while`.
+    BeginWhileRepeat {
+        pred: Vec<Expr>,
+        body: Vec<Expr>,
+        span: Span,
+    },
+
+    /// `BEGIN body AGAIN`.
+    /// Infinite loop.  Exits only via LEAVE or EXIT (handled in
+    /// later milestones — for now this emits as Factor's
+    /// `[ body t ] loop` which is genuinely infinite).
+    BeginAgain { body: Vec<Expr>, span: Span },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +129,10 @@ impl Expr {
             Expr::Lit(Literal::Float { span, .. }) => *span,
             Expr::Lit(Literal::Str   { span, .. }) => *span,
             Expr::WordRef { span, .. } => *span,
+            Expr::If               { span, .. } => *span,
+            Expr::BeginUntil       { span, .. } => *span,
+            Expr::BeginWhileRepeat { span, .. } => *span,
+            Expr::BeginAgain       { span, .. } => *span,
         }
     }
 }

@@ -150,6 +150,77 @@ fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
                 }
             }
         }
+
+        // ── Control flow ───────────────────────────────────────────
+        //
+        // ANS structures are recursive; Factor's combinator form is
+        // pure (no side effects in the structure itself, just the
+        // body quotations).  Emit:
+        //
+        //   IF t [ELSE e] THEN  →  [ t ] [ e ] if         (else absent
+        //                          [ t ] when             → use `when`)
+        //   BEGIN b UNTIL       →  [ b zero? ] loop
+        //                          (loop while body returns true →
+        //                           ANS UNTIL loops while flag = 0)
+        //   BEGIN p WHILE b REPEAT → [ p ] [ b ] while
+        //   BEGIN b AGAIN       →  [ b t ] loop
+        //                          (infinite — LEAVE/EXIT lands later)
+
+        Expr::If { then_body, else_body, .. } => {
+            out.push_str("[ ");
+            emit_exprs(then_body, r, out);
+            out.push_str(" ] ");
+            if let Some(eb) = else_body {
+                out.push_str("[ ");
+                emit_exprs(eb, r, out);
+                out.push_str(" ] if");
+            } else {
+                out.push_str("when");
+            }
+        }
+        Expr::BeginUntil { body, .. } => {
+            // ANS: continue while flag == 0; Factor loop: continue
+            // while body returns t.  Body produces flag; we want
+            // `flag zero?` as the loop continuation.
+            out.push_str("[ ");
+            emit_exprs(body, r, out);
+            out.push_str(" math:zero? ] kernel:loop");
+        }
+        Expr::BeginWhileRepeat { pred, body, .. } => {
+            // Avoid Factor's `while` here.  `while` has strict
+            // stack-effect inference that requires pred to produce
+            // a clean boolean above an unchanged ..a — for ANS
+            // predicates like a bare `dup` (which extends the stack
+            // rather than consuming-and-flagging), the inference
+            // diverges and the compiler hangs at eval time.
+            //
+            // Instead, emit via `loop` directly with an explicit
+            // zero-test branch:
+            //
+            //   [ <pred> math:zero?
+            //     [ f ] [ <body> t ] kernel:if
+            //   ] kernel:loop
+            //
+            // Trace per iteration:
+            //   pred       leaves flag on top of ..a
+            //   zero?      converts ANS-flag to Factor t/f (t == was 0)
+            //   if         t → return f to loop  (exit)
+            //              f → run body, return t (continue)
+            //   loop       pops the returned flag
+            out.push_str("[ ");
+            emit_exprs(pred, r, out);
+            out.push_str(" math:zero? [ f ] [ ");
+            emit_exprs(body, r, out);
+            out.push_str(" t ] kernel:if ] kernel:loop");
+        }
+        Expr::BeginAgain { body, .. } => {
+            // Genuinely infinite — `loop` continues while body returns t,
+            // so push t after the body.  LEAVE/EXIT will be added in
+            // a later milestone via continuation throws.
+            out.push_str("[ ");
+            emit_exprs(body, r, out);
+            out.push_str(" t ] kernel:loop");
+        }
     }
 }
 

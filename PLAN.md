@@ -241,6 +241,22 @@ Abstract interpretation over basic blocks; unification at IF/THEN merges; bounde
 Compile-time defining words.  Rust evaluates constant expressions at parse time; emits Factor `CONSTANT:` for true constants and `: name <value> ; inline` for foldable computations.
 *Success:* `64 constant maxiter  maxiter 2 *` → `128`.
 
+> *Variable escape-analysis (the optimisation that makes globals fast):*
+> ANS Forth says `VARIABLE x` returns a byte-addressable address that
+> the user can do arithmetic on.  In practice ~95% of variables are
+> used ONLY as `x @` / `x !` / `x +!`.  After resolve we run a
+> per-variable escape pass (`compiler/escape.rs`): if every reference
+> to `x` is immediately followed by `@`, `!`, or `+!`, we narrow the
+> emit to a Factor `SYMBOL:` with `get-global`/`set-global` — no
+> byte-array, no pinned-pointer FFI, fully optimisable by Factor's
+> compiler (load/store folding, loop hoisting, branch propagation).
+> Variables that *do* escape (dup'd, passed to user words, address
+> arithmetic, unknown sinks) fall back to the existing nf-addr tuple
+> model.  This is the Mandelbrot demo's `mb-row` / `mb-rgb` win:
+> the inner pixel loop never touches the byte-array layer.  Same
+> trick available for `CREATE`/`ALLOT` arrays in M2.9 (narrow to
+> `specialized-array` when access pattern is indexed-only).
+
 **Milestone 2.9 — `CREATE`/`DOES>`.**
 Trickier ANS construct.  Emit a Factor parsing-word equivalent that allocates data space at compile time and bound the runtime quotation.
 *Success:* a counted-string-defining program works as expected.

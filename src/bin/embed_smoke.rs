@@ -10,6 +10,12 @@
 //!   cargo run --bin embed-smoke                    -- defaults to mandelbrot image
 //!   cargo run --bin embed-smoke -- nf-slim-v1.image -- alt image
 //!   cargo run --bin embed-smoke -- nf-mandelbrot.image "USE: forth.runtime 42 forth.runtime:. flush"
+//!
+//! WATCHDOG: a Factor infinite loop or runaway compile can hang
+//! `nf_eval_string` indefinitely.  A background thread aborts the
+//! process after EMBED_SMOKE_TIMEOUT seconds (default 15) so the
+//! shell prompt always comes back.  Override with
+//! `EMBED_SMOKE_TIMEOUT=N` env var; set to 0 to disable (don't).
 
 #![cfg(target_os = "windows")]
 
@@ -17,12 +23,52 @@ use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::os::raw::c_void;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Arm a watchdog that aborts the process if `label` doesn't return
+/// within `timeout`.  Cancel by dropping the returned handle.
+fn arm_watchdog(label: &'static str, timeout: Duration) -> WatchdogHandle {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel2 = cancel.clone();
+    std::thread::Builder::new()
+        .name(format!("watchdog<{label}>"))
+        .spawn(move || {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if cancel2.load(Ordering::Relaxed) { return; }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            eprintln!(
+                "\n[watchdog] *** TIMEOUT: `{label}` exceeded {:?}; aborting ***",
+                timeout,
+            );
+            std::process::abort();
+        })
+        .expect("spawn watchdog");
+    WatchdogHandle { cancel }
+}
+
+struct WatchdogHandle { cancel: Arc<AtomicBool> }
+impl Drop for WatchdogHandle {
+    fn drop(&mut self) { self.cancel.store(true, Ordering::Relaxed); }
+}
 
 type FactorVm     = c_void;
 type VmParameters = c_void;
 type VmChar       = u16;
 
 fn main() {
+    // Always-on watchdog.  Override with EMBED_SMOKE_TIMEOUT=<secs>;
+    // the default is generous enough for any reasonable eval and far
+    // short of the user's patience for a hung shell.
+    let timeout_s: u64 = std::env::var("EMBED_SMOKE_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15);
+    let _wd = arm_watchdog("embed-smoke", Duration::from_secs(timeout_s));
+
     let mut args = std::env::args().skip(1);
     let image_name = args.next().unwrap_or_else(|| "nf-mandelbrot.image".into());
     let expr = args.next().unwrap_or_else(|| "2 3 + . flush".into());
