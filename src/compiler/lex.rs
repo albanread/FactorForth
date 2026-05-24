@@ -394,7 +394,15 @@ fn classify_word_or_number(raw: &str, span: Span) -> Result<Tok, CompileError> {
         return parse_int_with_base(rest, 2, NumBase::Binary, raw, span);
     }
     if let Some(rest) = raw.strip_prefix('#') {
-        return parse_int_with_base(rest, 10, NumBase::DecimalExplicit, raw, span);
+        // `#<digits>` is an explicit-decimal literal (`#42`).
+        // BUT — `#S`, `#>`, `#`, and other `#`-prefixed words are
+        // user-visible ANS words (the pictured-numeric-output DSL).
+        // Only treat as a number when the rest is non-empty AND
+        // entirely digit characters; otherwise let it fall through
+        // to the word arm.
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
+            return parse_int_with_base(rest, 10, NumBase::DecimalExplicit, raw, span);
+        }
     }
     if let Some(rest) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
         return parse_int_with_base(rest, 16, NumBase::Hex0x, raw, span);

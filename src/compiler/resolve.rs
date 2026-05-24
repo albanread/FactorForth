@@ -116,6 +116,9 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("/",    Builtin { vocab: "math", factor_name: "/i"  }),  // ANS / is integer-divide
         ("mod",  Builtin { vocab: "math", factor_name: "mod" }),
         ("negate", Builtin { vocab: "math", factor_name: "neg" }),
+        ("abs",  Builtin { vocab: "math", factor_name: "abs" }),
+        ("min",  Builtin { vocab: "math.order", factor_name: "min" }),
+        ("max",  Builtin { vocab: "math.order", factor_name: "max" }),
 
         // Comparisons.  ANS returns -1/0; Factor returns t/f.
         // `IF` works on Factor's truthy semantics (anything-not-f is
@@ -162,6 +165,26 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("cmove", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cmove" }),
         ("fill",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "fill" }),
         ("bl",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "bl" }),
+
+        // Pictured numeric output — the ANS DSL for formatting
+        // numbers as strings.  All five build incrementally into
+        // a session-scoped accumulator; #> closes and yields
+        // (c-addr u).  See forth.runtime for the model.
+        ("<#",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "<#" }),
+        ("#",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "#" }),
+        ("#s",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "#S" }),
+        ("sign",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "sign" }),
+        ("hold",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "hold" }),
+        ("#>",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "#>" }),
+        ("n>$",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "n>$" }),
+
+        // Base-switching shortcuts (these aren't strictly ANS —
+        // the spec just says `BASE` is settable — but they're so
+        // universally provided that programs assume them.)
+        ("hex",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "hex" }),
+        ("decimal", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "decimal" }),
+        ("binary",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "binary" }),
+        ("octal",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "octal" }),
 
         // Memory model — `@` collides with math.ratios, so always FQ
         ("@",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "@" }),

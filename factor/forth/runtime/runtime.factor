@@ -402,6 +402,70 @@ USING: io.encodings.utf8 byte-arrays sequences ;
 ! to clear buffers (`buf 80 BL FILL`).
 CONSTANT: bl 32
 
+! ── Pictured numeric output (the ANS `<# # #S sign hold #>` DSL) ──
+!
+! In traditional ANS this DSL uses PAD as the accumulator and
+! builds the string backward.  We replace PAD with a per-call
+! Factor string-buffer that we build *forward* and reverse at
+! `#>`.  Observable behaviour matches ANS exactly:
+!
+!   <#  opens a session (clears the accumulator)
+!   #   peels one digit off TOS using current BASE, pushes its
+!       character onto the accumulator
+!   #S  peels remaining digits until n = 0; always at least one
+!       digit so `0 <# #S sign #>` yields "0"
+!   sign  if TOS is negative, prepend '-' (in pre-reverse order,
+!         push '-' onto the accumulator)
+!   hold  push an arbitrary character (useful for "0x" prefixes,
+!         comma group separators, etc.)
+!   #>  close session, drop the residual n, return (c-addr u) of
+!       the finished string
+!
+! Plus the convenience: `n>$` does the standard signed-decimal
+! flow in one word — `dup abs <# #S swap sign #>` is the ANS
+! incantation.
+
+USING: namespaces math.parser ;
+
+SYMBOL: current-num-buf
+CONSTANT: digit-chars "0123456789abcdefghijklmnopqrstuvwxyz"
+
+: <#  ( -- )
+    SBUF" " clone current-num-buf set ;
+
+: #  ( n -- n' )
+    number-base get /mod
+    digit-chars nth
+    current-num-buf get push ;
+
+: #S  ( n -- 0 )
+    ! Always extract at least one digit, so 0 #S → "0".
+    # [ dup 0 = ] [ # ] until ;
+
+: sign  ( n -- )
+    0 < [ CHAR: - current-num-buf get push ] when ;
+
+: hold  ( ch -- )
+    current-num-buf get push ;
+
+: #>  ( n -- c-addr u )
+    drop
+    current-num-buf get >string reverse
+    utf8 encode
+    dup length
+    [ 0 <nf-addr> ] dip ;
+
+! ANS-idiomatic single-word: signed decimal formatting.
+: n>$  ( n -- c-addr u )
+    dup abs <# #S swap sign #> ;
+
+! Base-switching shortcuts.  ANS users say `hex` to switch to
+! base 16 for a block, then `decimal` to switch back.
+: hex     ( -- ) 16 number-base set ;
+: decimal ( -- ) 10 number-base set ;
+: binary  ( -- )  2 number-base set ;
+: octal   ( -- )  8 number-base set ;
+
 ! ── 5. ANS BOOLEANS (-1 / 0, not Factor's t / f) ─────────────────────────
 
 CONSTANT: forth-true  -1

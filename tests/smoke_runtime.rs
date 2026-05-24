@@ -728,6 +728,67 @@ fn phase210_cmove() {
     }
 }
 
+/// Pictured numeric output: `n>$` for the common signed-decimal
+/// case.  Positive, negative, zero.
+#[test]
+#[ignore]
+fn phase210b_n_to_string() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "1234 n>$ type space  \
+                 -7   n>$ type space  \
+                 0    n>$ type");
+            assert!(out.contains("1234"), "expected 1234, got {out:?}");
+            assert!(out.contains("-7"),   "expected -7,   got {out:?}");
+            assert!(out.contains("0"),    "expected 0,    got {out:?}");
+        });
+    }
+}
+
+/// The full DSL form with hex prefix.  Build `0xff` from `255`
+/// using HOLD for the literal prefix characters.
+#[test]
+#[ignore]
+fn phase210b_dsl_with_prefix() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "255 hex  dup abs <# #S \
+                 120 hold  48 hold  \
+                 swap sign #> type  decimal");
+            assert!(out.contains("0xff"), "expected '0xff', got {out:?}");
+        });
+    }
+}
+
+/// Base switching: `hex 255 . decimal` should print "ff".
+#[test]
+#[ignore]
+fn phase210b_base_switching() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "hex 255 n>$ type decimal");
+            assert!(out.contains("ff"), "expected 'ff', got {out:?}");
+        });
+    }
+}
+
+/// `0 n>$` must produce "0", not the empty string — the spec
+/// requires #S to extract at least one digit.
+#[test]
+#[ignore]
+fn phase210b_zero_prints_zero() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ".\" [\" 0 n>$ type .\" ]\"");
+            assert!(out.contains("[0]"), "expected [0], got {out:?}");
+        });
+    }
+}
+
 /// `BL` is 32 (ASCII space).  Verify the constant.
 #[test]
 #[ignore]

@@ -88,3 +88,10 @@ in six months).
   returns (c-addr, u); TYPE/CMOVE/FILL/BL ship.  Two stack-order
   bugs caught in FILL — same lesson as M2.5 and M2.9: write
   multi-step stack flow with `:: locals` not `bi`/`tri` shuffles.
+- `2026-05-24-m2.10b-number-formatting.md` — M2.10b pictured
+  numeric output.  `<# # #S sign hold #>` reframed as a small
+  stack-based string builder; PAD is gone, replaced by a
+  per-call SBUF that gets reversed at close time.  Plus
+  base-switching (hex/decimal/binary/octal), `n>$` convenience,
+  and a lexer paper-cut where `#S` had been misparsed as a
+  malformed decimal-prefix number.

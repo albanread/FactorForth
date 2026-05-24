@@ -174,6 +174,9 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("/",      e(2, 1));
     m.insert("mod",    e(2, 1));
     m.insert("negate", e(1, 1));
+    m.insert("abs",  e(1, 1));
+    m.insert("min",  e(2, 1));
+    m.insert("max",  e(2, 1));
 
     // Comparisons / bitwise
     m.insert("=",   e(2, 1));
@@ -209,6 +212,19 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("cmove", e(3, 0));   // src dst u --
     m.insert("fill",  e(3, 0));   // c-addr u char --
     m.insert("bl",    e(0, 1));   // -- 32
+
+    // Pictured numeric output (M2.10b)
+    m.insert("<#",    e(0, 0));   // --
+    m.insert("#",     e(1, 1));   // n -- n/base
+    m.insert("#s",    e(1, 1));   // n -- 0
+    m.insert("sign",  e(1, 0));   // n --
+    m.insert("hold",  e(1, 0));   // ch --
+    m.insert("#>",    e(1, 2));   // n -- c-addr u
+    m.insert("n>$",   e(1, 2));   // n -- c-addr u
+    m.insert("hex",     e(0, 0));
+    m.insert("decimal", e(0, 0));
+    m.insert("binary",  e(0, 0));
+    m.insert("octal",   e(0, 0));
 
     // Memory model
     m.insert("@",  e(1, 1));
