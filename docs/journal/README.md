@@ -103,3 +103,9 @@ in six months).
   accessor with the captured does_body inlined and `+`
   translated to `nf-addr+`.  Two ordering bugs (expand-after-
   resolve, row-vars-vs-concrete-effect) caught and fixed.
+- `2026-05-24-phase-3.1a-session-foundation.md` — Phase 3.1a.
+  `Session` abstraction lands: worker thread owns the VM,
+  channel-based eval, three IoMode shapes, singleton-per-
+  process enforcement, per-eval watchdog.  Extern functions
+  defined but not yet wired through Factor (3.1b).
+  Architecture sketch + the FFI-via-add-library plan for 3.1b.

@@ -17,7 +17,8 @@
 
 // Modules added in order as phases land.
 pub mod compiler;
-// pub mod session;   // Phase 3
+#[cfg(target_os = "windows")]
+pub mod session;
 // pub mod runtime;   // Phase 3
 // pub mod ffi;       // Phase 3
 
