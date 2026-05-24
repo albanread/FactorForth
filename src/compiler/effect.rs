@@ -202,6 +202,13 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("cr",    e(0, 0));
     m.insert("emit",  e(1, 0));
     m.insert("space", e(0, 0));
+    m.insert("spaces", e(1, 0));
+
+    // String vocabulary (M2.10)
+    m.insert("type",  e(2, 0));   // c-addr u --
+    m.insert("cmove", e(3, 0));   // src dst u --
+    m.insert("fill",  e(3, 0));   // c-addr u char --
+    m.insert("bl",    e(0, 1));   // -- 32
 
     // Memory model
     m.insert("@",  e(1, 1));

@@ -82,3 +82,9 @@ in six months).
   three-step reframing of M2.9 from "model the byte-poking
   primitives" to "provide the common defining-words and reduce
   the need for byte-poking in the first place."
+- `2026-05-24-m2.10-strings.md` — M2.10 strings.  ANS's notorious
+  PAD-as-shared-temporary and dual c-addr/counted-string
+  conventions both disappear in our nf-addr model.  `S"` correctly
+  returns (c-addr, u); TYPE/CMOVE/FILL/BL ship.  Two stack-order
+  bugs caught in FILL — same lesson as M2.5 and M2.9: write
+  multi-step stack flow with `:: locals` not `bi`/`tri` shuffles.

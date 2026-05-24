@@ -327,7 +327,80 @@ USE: prettyprint.config       ! for number-base
 : emit ( ch -- )  1string write ; inline
 : space ( -- )    " " write ; inline
 : spaces ( n -- ) [ space ] times ; inline
-: type ( str -- ) write ; inline
+
+! ── ANS string vocabulary ─────────────────────────────────────────────────
+!
+! ANS Forth's traditional string model uses PAD-as-temporary, dual
+! c-addr / counted-string representations, and CMOVE direction
+! conventions that have made these the most crash-prone words in
+! the spec for forty years.  We sidestep all of that:
+!
+!   - Every string lives as an nf-addr wrapping a byte-array.
+!     Byte-arrays are GC'd; nothing ever clobbers anything.
+!   - (c-addr u) is always a *pair* explicitly on the stack.
+!   - PAD doesn't exist.  Words that traditionally returned a
+!     pointer into PAD instead allocate a fresh byte-array.
+!
+! `S" text"` in user source emits as
+!   "text" forth.runtime:s-quote-runtime
+! which produces (nf-addr u) per ANS.  `." text"` emits via the
+! dedicated `print-string` (a thin wrapper over Factor's `write`)
+! to avoid round-tripping through nf-addr for output-only text.
+
+USING: io.encodings.utf8 byte-arrays sequences ;
+
+! s-quote-runtime: take a Factor string literal (compile-time
+! constant) and return the ANS (nf-addr u) pair.  Allocates a
+! fresh byte-array per call.
+::  s-quote-runtime  ( factor-str -- nf-addr u )
+    factor-str utf8 encode  :> bytes
+    bytes 0 <nf-addr>
+    bytes length ; inline
+
+! print-string: emit a Factor string directly.  Used by the `."`
+! emit shape; not user-callable through ANS.
+: print-string ( factor-str -- )
+    write ; inline
+
+! ANS TYPE: write u bytes from c-addr to standard output.
+! Decodes via UTF-8 — string literals from S" are encoded UTF-8
+! at compile-time, so the decode round-trips losslessly.  For
+! cbuffer contents the user filled themselves, garbage in =
+! garbage out (no validation).
+::  type  ( c-addr u -- )
+    c-addr ba>>   :> ba
+    c-addr off>>  :> start
+    start u +     :> end
+    start end ba <slice> utf8 decode write ;
+
+! CMOVE: copy u bytes from src to dst.  ANS doesn't define
+! behaviour for overlapping ranges in CMOVE (CMOVE> is the
+! backward-direction word for that case); we don't either,
+! conservatively forward-copy.
+!
+! NB: nf-addr+ has signature ( addr n -- addr' ) — addr below,
+! offset on top.  So `src i nf-addr+` is "src offset by i."
+::  cmove  ( src dst u -- )
+    u 0 <= [ ] [
+        u <iota> [| i |
+            src i nf-addr+ c@         ! fetch byte at src[i]
+            dst i nf-addr+ nf-c!      ! store at dst[i]
+        ] each
+    ] if ;
+
+! FILL: write `char` (low byte) to u consecutive bytes starting
+! at c-addr.
+::  fill  ( c-addr u char -- )
+    u 0 <= [ ] [
+        char :> ch
+        u <iota> [| i |
+            ch  c-addr i nf-addr+  nf-c!     ! ch at c-addr+i
+        ] each
+    ] if ;
+
+! Convenience: `BL` constant for the ASCII space, used by FILL
+! to clear buffers (`buf 80 BL FILL`).
+CONSTANT: bl 32
 
 ! ── 5. ANS BOOLEANS (-1 / 0, not Factor's t / f) ─────────────────────────
 

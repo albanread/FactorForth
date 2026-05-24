@@ -442,17 +442,31 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
         Expr::Lit(Literal::Str { value, kind, .. }) => {
             match kind {
                 StringKind::DotQuote => {
-                    // ANS `." x"` is "emit x at runtime".  Translate
-                    // to `"x" forth.runtime:type` — type writes a
-                    // counted string and is the right ANS semantic.
+                    // ANS `." text"` emits the literal at runtime.
+                    // We use the dedicated `print-string` helper —
+                    // a thin Factor `write` wrapper — rather than
+                    // round-tripping the text through nf-addr just
+                    // to feed `type`, since the user can't observe
+                    // the address either way.
                     out.push('"');
                     out.push_str(&factor_escape(value));
-                    out.push_str("\" forth.runtime:type");
+                    out.push_str("\" forth.runtime:print-string");
                 }
-                StringKind::SQuote | StringKind::CQuote => {
-                    // For now treat both as raw string literal on the
-                    // data stack.  When forth.runtime grows S" and C"
-                    // proper handling, replace this.
+                StringKind::SQuote => {
+                    // ANS `S" text"` produces (c-addr, u) on the
+                    // data stack — TWO items.  `s-quote-runtime`
+                    // materialises the Factor literal into a fresh
+                    // nf-addr backed by a UTF-8 byte-array, plus
+                    // the byte length.  GC'd; no PAD, no clobbering.
+                    out.push('"');
+                    out.push_str(&factor_escape(value));
+                    out.push_str("\" forth.runtime:s-quote-runtime");
+                }
+                StringKind::CQuote => {
+                    // ANS C" pushes a counted-string c-addr (length
+                    // byte at addr, chars from addr+1).  Less
+                    // commonly used than S"; deferred.  Falls
+                    // through to bare-string for now.
                     out.push('"');
                     out.push_str(&factor_escape(value));
                     out.push('"');
@@ -711,8 +725,19 @@ mod tests {
     }
 
     #[test]
-    fn dot_quote_emits_type() {
+    fn dot_quote_emits_print_string() {
+        // `." ..."` now emits via the dedicated print-string
+        // helper (M2.10) — TYPE was reclaimed for ANS-correct
+        // (c-addr u) semantics.
         let out = compile_str(": greet .\" hi\" ;");
-        assert!(out.contains("\"hi\" forth.runtime:type"), "got {out}");
+        assert!(out.contains("\"hi\" forth.runtime:print-string"), "got {out}");
+    }
+
+    #[test]
+    fn s_quote_emits_s_quote_runtime() {
+        // S" now produces (nf-addr u) via s-quote-runtime, per ANS.
+        let out = compile_str("s\" hi\" type");
+        assert!(out.contains("\"hi\" forth.runtime:s-quote-runtime"), "got {out}");
+        assert!(out.contains("forth.runtime:type"), "got {out}");
     }
 }

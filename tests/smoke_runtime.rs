@@ -680,6 +680,66 @@ fn phase27_correct_programs_still_compile() {
     }
 }
 
+// ─── Phase 2.10 — ANS strings that don't crash ──────────────────────────────
+
+/// `S"` correctly returns (c-addr, u) and `TYPE` consumes both.
+/// No PAD-as-shared-temporary; the byte-array is GC'd.
+#[test]
+#[ignore]
+fn phase210_s_quote_type() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "s\" hello, world\" type cr");
+            assert!(out.contains("hello, world"),
+                    "expected hello world output, got {out:?}");
+        });
+    }
+}
+
+/// `FILL` writes a byte across a buffer, `TYPE` reads back.
+#[test]
+#[ignore]
+fn phase210_fill_and_type() {
+    unsafe {
+        with_vm(|api, vm| {
+            // Fill 4 bytes with 'A' (65), then type the buffer.
+            let out = compile_and_run(api, vm,
+                "4 cbuffer buf  0 buf 4 65 fill  0 buf 4 type");
+            assert!(out.contains("AAAA"), "expected AAAA, got {out:?}");
+        });
+    }
+}
+
+/// `CMOVE` copies bytes between buffers.  Set up a source with
+/// known bytes, then cmove and re-read from destination.
+#[test]
+#[ignore]
+fn phase210_cmove() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "4 cbuffer src  4 cbuffer dst \
+                 72  0 src c!  105 1 src c!  33 2 src c! \
+                 0 src 0 dst 3 cmove \
+                 0 dst 3 type");
+            assert!(out.contains("Hi!"), "expected Hi!, got {out:?}");
+        });
+    }
+}
+
+/// `BL` is 32 (ASCII space).  Verify the constant.
+#[test]
+#[ignore]
+fn phase210_bl_is_space() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm, "bl .");
+            assert!(out.contains("32"), "expected 32, got {out:?}");
+        });
+    }
+}
+
 // ─── Phase 2.9 — standard defining-words (array, farray, cbuffer) ───────────
 
 /// `array` — n-cell integer array, `( idx -- addr )` instance.

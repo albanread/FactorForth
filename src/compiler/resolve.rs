@@ -152,6 +152,16 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("cr", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cr" }),
         ("emit", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "emit" }),
         ("space", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "space" }),
+        ("spaces", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "spaces" }),
+
+        // ANS string vocabulary.  `type`, `cmove`, `fill` operate
+        // on (c-addr, u) pairs; PAD doesn't exist in our model so
+        // there are no clobbering surprises.  `bl` is the ASCII
+        // space constant for buffer-clearing idioms.
+        ("type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "type" }),
+        ("cmove", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cmove" }),
+        ("fill",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "fill" }),
+        ("bl",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "bl" }),
 
         // Memory model — `@` collides with math.ratios, so always FQ
         ("@",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "@" }),
