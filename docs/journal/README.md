@@ -50,3 +50,9 @@ in six months).
   bug where emit-time fixed-string vocabs (forth.runtime,
   kernel, math, io) weren't always brought into USING:.  Fix
   was hardcoding them as baseline; cleaner refactor deferred.
+- `2026-05-24-m2.7-effect-inference.md` — M2.7 first cut.
+  Straight-line bodies get rigorous effect inference; control-
+  flow bodies yield Unknown and the check is skipped.
+  `: bad ( -- ) 1 2 ;` now reports the mismatch in pure Rust
+  before any IR generation.  Sketches the control-flow formulas
+  for the follow-up.

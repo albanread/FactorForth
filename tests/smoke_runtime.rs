@@ -531,6 +531,37 @@ fn phase25_nested_i_and_j() {
     }
 }
 
+// ─── Phase 2.7 — stack-effect inference ─────────────────────────────────────
+
+/// The M2.7 plan success criterion: a declared effect that doesn't
+/// match the body's behaviour is rejected by `compile` before the
+/// IR ever reaches the VM.  We don't even instantiate a VM here —
+/// the failure happens in pure Rust, no Factor involvement.
+#[test]
+fn phase27_canonical_effect_mismatch() {
+    let err = newfactor::compiler::compile(": bad ( -- ) 1 2 ;")
+        .expect_err("expected effect mismatch error");
+    assert!(err.contains("bad"),     "expected word name in error: {err}");
+    assert!(err.contains("declared"), "expected 'declared' in error: {err}");
+    assert!(err.contains("2"),       "expected '2' (the actual output count): {err}");
+}
+
+/// Passing programs from earlier milestones still compile cleanly —
+/// no false-positive effect errors from the new pass.
+#[test]
+fn phase27_correct_programs_still_compile() {
+    for src in [
+        ": square ( n -- n^2 ) dup * ;",
+        ": add2 ( a b -- a+b ) + ;",
+        ": inc ( n -- n+1 ) 1 + ; : twice ( n -- n+2 ) inc inc ;",
+        // No declared effect: nothing to mismatch.
+        "42 .",
+    ] {
+        newfactor::compiler::compile(src)
+            .unwrap_or_else(|e| panic!("compile failed for {src:?}: {e}"));
+    }
+}
+
 // ─── Phase 2.6 — CASE/OF/ENDOF/ENDCASE ──────────────────────────────────────
 
 /// CASE arm dispatch — input 2 should hit the "two" arm.
