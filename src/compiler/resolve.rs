@@ -282,29 +282,9 @@ pub(crate) fn factor_user_name(ans_lc: &str) -> String {
     ans_lc.to_string()
 }
 
-/// Helper for emit.rs: which vocabs does this resolved program need
-/// to import in its `USING:` clause?  Returns a sorted, deduplicated
-/// list.
-///
-/// The baseline set is what emit-time fixed strings can reach for:
-///   - `kernel`        for `if`, `when`, `loop`, `drop`, `t`/`f`
-///   - `math`          for `zero?` used inside control-flow emit
-///   - `io`            for `flush` appended by the emit driver
-///   - `forth.runtime` for `:.` `:type` etc. emitted from `."` strings
-///                     and from the always-fully-qualified ANS I/O
-///
-/// resolve.rs then adds vocabs reached by user word references.
-pub fn vocabs_needed(r: &Resolved) -> Vec<&'static str> {
-    let mut set: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
-    set.insert("kernel");
-    set.insert("math");
-    set.insert("io");
-    set.insert("forth.runtime");
-    for t in r.word_targets.values() {
-        if let Some(v) = t.vocab() { set.insert(v); }
-    }
-    set.into_iter().collect()
-}
+// (vocabs_needed moved to emit.rs as part of the sema refactor —
+// it operates over &Sema now, and lives next to the emit code that
+// uses it.)
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -360,11 +340,5 @@ mod tests {
         assert!(matches!(err, ResolveError::RedefinedWord { .. }));
     }
 
-    #[test]
-    fn vocabs_needed_includes_runtime_for_dot() {
-        let r = resolve_str("42 .").unwrap();
-        let v = vocabs_needed(&r);
-        assert!(v.contains(&"forth.runtime"));
-        assert!(v.contains(&"kernel"));
-    }
+    // vocabs_needed lives in emit now; its tests moved there too.
 }

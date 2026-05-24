@@ -56,3 +56,9 @@ in six months).
   `: bad ( -- ) 1 2 ;` now reports the mismatch in pure Rust
   before any IR generation.  Sketches the control-flow formulas
   for the follow-up.
+- `2026-05-24-sema-refactor.md` — Sema spine, phase-dump
+  infrastructure, CLI integration.  And the corpus-design
+  conversation: corpus is canonical, Sema is `analyze(corpus)`,
+  FORGET is out, replay is the tool we have if we ever want
+  it.  Phase 3's REPL gets a clean monotonic accumulation model
+  on this foundation.

@@ -1,0 +1,427 @@
+//! Phase-by-phase dumps.  Pretty-printers for every compiler stage,
+//! producing human- *and* AI-readable text.  These exist so a human
+//! debugging the compiler — or Claude reading state in a future
+//! session without re-deriving everything from source — can ask
+//! "what does the compiler see at this point?" and get a clear
+//! answer.
+//!
+//! Each dump function writes to a `String` rather than to a `Write`
+//! trait object — we accept the buffering cost for ergonomics, and
+//! these dumps are bounded to a handful of pages per program.
+//!
+//! ## Formats
+//!
+//! The dumps follow a consistent shape:
+//!
+//! ```text
+//! HEADER  (one-line summary)
+//! ─────────────────────────────────────────
+//!   content, indented as needed
+//! ```
+//!
+//! Spans are rendered as `L:C-L:C` (1-based line:col half-open).
+//! Lowercased names are noted as such when relevant.  Indented
+//! blocks use two spaces per level; nested AST nodes show the same.
+//!
+//! ## Stages
+//!
+//! - `dump_tokens(&[Token])` — lex output
+//! - `dump_ast(&Program)` — parse output
+//! - `dump_sema(&Sema)` — semantic database
+//! - `dump_effects(&Sema)` — focused on user-word effects
+//! - `dump_ir(&str)` — emit output (raw Factor source)
+//! - `dump_all(...)` — concatenate all stages with separators
+
+use std::fmt::Write;
+
+use super::ast::{Expr, Item, Literal, Program};
+use super::effect::Effect;
+use super::error::Span;
+use super::lex::{StringKind, Tok, Token};
+use super::sema::{EscapeState, Sema};
+
+// ─── Tokens ────────────────────────────────────────────────────────────────
+
+pub fn dump_tokens(tokens: &[Token]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "TOKENS  ({} token{})",
+                     tokens.len(),
+                     if tokens.len() == 1 { "" } else { "s" });
+    let _ = writeln!(out, "{}", separator());
+    if tokens.is_empty() {
+        let _ = writeln!(out, "  (empty input)");
+        return out;
+    }
+    for t in tokens {
+        let pos = format!("{}:{}-{}:{}",
+                          t.span.start.line, t.span.start.col,
+                          t.span.end.line,   t.span.end.col);
+        let (kind, value) = describe_tok(&t.kind);
+        let _ = writeln!(out, "  {:<13} {:<11} {}", pos, kind, value);
+    }
+    out
+}
+
+fn describe_tok(t: &Tok) -> (&'static str, String) {
+    match t {
+        Tok::Word(s)            => ("Word",   format!("`{s}`")),
+        Tok::Int { value, base, raw } =>
+            ("Int",    format!("{value}  ({:?}, raw=`{raw}`)", base)),
+        Tok::Float { value, raw } =>
+            ("Float",  format!("{value}  (raw=`{raw}`)")),
+        Tok::Str { value, kind } =>
+            ("Str",    format!("{:?}  (kind={:?})", value, kind)),
+        Tok::LineComment(s)     => ("Line\\",   format!("\"{s}\"")),
+        Tok::BlockComment(s)    => ("Block(",   format!("\"{s}\"")),
+    }
+}
+
+// ─── AST ───────────────────────────────────────────────────────────────────
+
+pub fn dump_ast(prog: &Program) -> String {
+    let mut out = String::new();
+    let n_def = prog.items.iter().filter(|i| matches!(i, Item::Definition(_))).count();
+    let n_top = prog.items.iter().filter(|i| matches!(i, Item::TopLevel { .. })).count();
+    let _ = writeln!(out, "AST  ({} definition{}, {} top-level block{})",
+                     n_def, if n_def == 1 { "" } else { "s" },
+                     n_top, if n_top == 1 { "" } else { "s" });
+    let _ = writeln!(out, "{}", separator());
+    if prog.items.is_empty() {
+        let _ = writeln!(out, "  (empty program)");
+        return out;
+    }
+    for item in &prog.items {
+        write_item(&mut out, item, 1);
+        let _ = writeln!(out);
+    }
+    out
+}
+
+fn write_item(out: &mut String, item: &Item, depth: usize) {
+    let indent = "  ".repeat(depth);
+    match item {
+        Item::Definition(d) => {
+            let _ = writeln!(out, "{indent}Definition `{}` @ {}",
+                             d.name, span_str(&d.span));
+            if let Some(e) = &d.effect {
+                let _ = writeln!(out, "{indent}  effect: ( {} -- {} )",
+                                 e.inputs.join(" "),
+                                 e.outputs.join(" "));
+            }
+            for be in &d.body {
+                write_expr(out, be, depth + 1);
+            }
+        }
+        Item::TopLevel { exprs, span } => {
+            let _ = writeln!(out, "{indent}TopLevel @ {}", span_str(span));
+            for e in exprs { write_expr(out, e, depth + 1); }
+        }
+    }
+}
+
+fn write_expr(out: &mut String, e: &Expr, depth: usize) {
+    let indent = "  ".repeat(depth);
+    match e {
+        Expr::Lit(Literal::Int   { value, span }) =>
+            { let _ = writeln!(out, "{indent}Int {value} @ {}", span_str(span)); }
+        Expr::Lit(Literal::Float { value, span }) =>
+            { let _ = writeln!(out, "{indent}Float {value} @ {}", span_str(span)); }
+        Expr::Lit(Literal::Str   { value, kind, span }) =>
+            { let _ = writeln!(out, "{indent}Str ({}) {:?} @ {}",
+                               str_kind_short(kind), value, span_str(span)); }
+        Expr::WordRef { name, span } =>
+            { let _ = writeln!(out, "{indent}WordRef `{name}` @ {}", span_str(span)); }
+        Expr::If { then_body, else_body, span } => {
+            let _ = writeln!(out, "{indent}If @ {}", span_str(span));
+            let _ = writeln!(out, "{indent}  then:");
+            for be in then_body { write_expr(out, be, depth + 2); }
+            if let Some(eb) = else_body {
+                let _ = writeln!(out, "{indent}  else:");
+                for be in eb { write_expr(out, be, depth + 2); }
+            }
+        }
+        Expr::BeginUntil { body, span } => {
+            let _ = writeln!(out, "{indent}BeginUntil @ {}", span_str(span));
+            for be in body { write_expr(out, be, depth + 1); }
+        }
+        Expr::BeginWhileRepeat { pred, body, span } => {
+            let _ = writeln!(out, "{indent}BeginWhileRepeat @ {}", span_str(span));
+            let _ = writeln!(out, "{indent}  pred:");
+            for be in pred { write_expr(out, be, depth + 2); }
+            let _ = writeln!(out, "{indent}  body:");
+            for be in body { write_expr(out, be, depth + 2); }
+        }
+        Expr::BeginAgain { body, span } => {
+            let _ = writeln!(out, "{indent}BeginAgain @ {}", span_str(span));
+            for be in body { write_expr(out, be, depth + 1); }
+        }
+        Expr::DoLoop { is_qdo, body, loop_kind, span } => {
+            let _ = writeln!(out, "{indent}DoLoop{} ({:?}) @ {}",
+                             if *is_qdo { " (?do)" } else { "" },
+                             loop_kind, span_str(span));
+            for be in body { write_expr(out, be, depth + 1); }
+        }
+        Expr::Case { arms, default, span } => {
+            let _ = writeln!(out, "{indent}Case @ {}", span_str(span));
+            for (i, arm) in arms.iter().enumerate() {
+                let _ = writeln!(out, "{indent}  arm[{i}] @ {}", span_str(&arm.span));
+                let _ = writeln!(out, "{indent}    match:");
+                for be in &arm.match_expr { write_expr(out, be, depth + 3); }
+                let _ = writeln!(out, "{indent}    body:");
+                for be in &arm.body { write_expr(out, be, depth + 3); }
+            }
+            if let Some(d) = default {
+                let _ = writeln!(out, "{indent}  default:");
+                for be in d { write_expr(out, be, depth + 2); }
+            }
+        }
+    }
+}
+
+fn str_kind_short(k: &StringKind) -> &'static str {
+    match k {
+        StringKind::DotQuote => ".\"",
+        StringKind::SQuote   => "S\"",
+        StringKind::CQuote   => "C\"",
+    }
+}
+
+// ─── Sema ──────────────────────────────────────────────────────────────────
+
+pub fn dump_sema(s: &Sema) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "SEMA");
+    let _ = writeln!(out, "{}", separator_thick());
+
+    // User words
+    let _ = writeln!(out, "User words ({}):", s.user_words.len());
+    if s.user_words.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        let mut names: Vec<&String> = s.user_words.keys().collect();
+        names.sort();
+        for name in names {
+            let u = &s.user_words[name];
+            let decl = match (u.declared_inputs, u.declared_outputs) {
+                (Some(i), Some(o)) => format!("declared ( {i} → {o} )"),
+                _ => "(no declared effect)".into(),
+            };
+            let infer = match s.user_effects.get(name).copied() {
+                Some(Effect::Known { inputs, outputs }) =>
+                    format!("inferred ( {inputs} → {outputs} )"),
+                Some(Effect::Unknown) => "inferred ( ? — control flow )".into(),
+                None                  => "inferred (—)".into(),
+            };
+            let _ = writeln!(out, "  {:<16} {:<28} {}", u.name, decl, infer);
+            let _ = writeln!(out, "                     def @ {}", span_str(&u.def_span));
+        }
+    }
+    let _ = writeln!(out);
+
+    // Effect errors
+    if !s.effect_errors.is_empty() {
+        let _ = writeln!(out, "Effect errors ({}):", s.effect_errors.len());
+        for e in &s.effect_errors {
+            let _ = writeln!(out, "  {e}");
+        }
+        let _ = writeln!(out);
+    }
+
+    // Variables / Constants placeholders (M2.8+)
+    let _ = writeln!(out, "Variables: (M2.8 — not yet collected)");
+    let _ = writeln!(out, "Constants: (M2.8 — not yet collected)");
+    let _ = writeln!(out);
+
+    // Call graph
+    let _ = writeln!(out, "Call graph:");
+    if s.call_graph.is_empty() {
+        let _ = writeln!(out, "  (no user words call anything)");
+    } else {
+        for (caller, callees) in &s.call_graph {
+            if callees.is_empty() {
+                let _ = writeln!(out, "  {caller}  →  (no calls)");
+            } else {
+                let list: Vec<String> = callees.iter().cloned().collect();
+                let _ = writeln!(out, "  {caller}  →  {}", list.join(", "));
+            }
+        }
+    }
+    let _ = writeln!(out);
+
+    // Use sites
+    let _ = writeln!(out, "Use sites:");
+    if s.use_sites.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        for (name, sites) in &s.use_sites {
+            let spans: Vec<String> = sites.iter().map(span_str).collect();
+            let _ = writeln!(out, "  {:<16} @ {}", name, spans.join(", "));
+        }
+    }
+    let _ = writeln!(out);
+
+    // Escape state (M2.8)
+    let _ = writeln!(out, "Escape analysis:");
+    if s.escape.is_empty() {
+        let _ = writeln!(out, "  (M2.8 — not yet collected)");
+    } else {
+        for (name, state) in &s.escape {
+            match state {
+                EscapeState::Narrow =>
+                    { let _ = writeln!(out, "  {name:<16} narrow"); }
+                EscapeState::Wide { reason, at } =>
+                    { let _ = writeln!(out, "  {name:<16} wide ({reason:?} @ {})", span_str(at)); }
+                EscapeState::Unknown =>
+                    { let _ = writeln!(out, "  {name:<16} unknown"); }
+            }
+        }
+    }
+
+    out
+}
+
+// ─── Effects (focused subset of sema) ──────────────────────────────────────
+
+pub fn dump_effects(s: &Sema) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "EFFECTS  ({} user word{})",
+                     s.user_effects.len(),
+                     if s.user_effects.len() == 1 { "" } else { "s" });
+    let _ = writeln!(out, "{}", separator());
+    if s.user_effects.is_empty() {
+        let _ = writeln!(out, "  (no user words)");
+        return out;
+    }
+    let mut names: Vec<&String> = s.user_effects.keys().collect();
+    names.sort();
+    for name in names {
+        let eff = s.user_effects[name];
+        let _ = writeln!(out, "  {name:<16} {eff}");
+    }
+    if !s.effect_errors.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Errors:");
+        for e in &s.effect_errors {
+            let _ = writeln!(out, "  {e}");
+        }
+    }
+    out
+}
+
+// ─── IR ────────────────────────────────────────────────────────────────────
+
+pub fn dump_ir(ir: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "FACTOR IR  ({} byte{})", ir.len(),
+                     if ir.len() == 1 { "" } else { "s" });
+    let _ = writeln!(out, "{}", separator());
+    for line in ir.lines() {
+        let _ = writeln!(out, "  {line}");
+    }
+    out
+}
+
+// ─── All ───────────────────────────────────────────────────────────────────
+
+/// Concatenate every available dump with thick separators between
+/// stages.  `ir` is optional — emit may not have run, or the caller
+/// may want sema-only output.
+pub fn dump_all(
+    tokens: &[Token],
+    prog: &Program,
+    sema: &Sema,
+    ir: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&dump_tokens(tokens));
+    out.push_str("\n\n");
+    out.push_str(&dump_ast(prog));
+    out.push_str("\n");
+    out.push_str(&dump_sema(sema));
+    out.push_str("\n");
+    if let Some(ir) = ir {
+        out.push_str(&dump_ir(ir));
+    }
+    out
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+fn span_str(s: &Span) -> String {
+    format!("{}:{}-{}:{}",
+            s.start.line, s.start.col,
+            s.end.line,   s.end.col)
+}
+
+fn separator() -> &'static str {
+    "─────────────────────────────────────────"
+}
+
+fn separator_thick() -> &'static str {
+    "═════════════════════════════════════════"
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::{lex, parse, sema::build};
+
+    fn dumps(src: &str) -> (String, String, String, String) {
+        let toks = lex(src).unwrap();
+        let prog = parse(&toks).unwrap();
+        let sema = build(prog.clone()).unwrap();
+        (
+            dump_tokens(&toks),
+            dump_ast(&prog),
+            dump_sema(&sema),
+            dump_effects(&sema),
+        )
+    }
+
+    #[test]
+    fn empty_program_dumps_cleanly() {
+        let (t, a, s, e) = dumps("");
+        assert!(t.contains("0 tokens"));
+        assert!(a.contains("empty program") || a.contains("0 definition"));
+        assert!(s.contains("User words (0)"));
+        assert!(e.contains("0 user words") || e.contains("no user words"));
+    }
+
+    #[test]
+    fn small_program_dumps_have_useful_content() {
+        let (t, a, s, e) = dumps(": square ( n -- n^2 ) dup * ; 5 square .");
+        // Tokens
+        assert!(t.contains("Word") && t.contains("square"));
+        // AST: a Definition named square with a body
+        assert!(a.contains("Definition `square`"));
+        assert!(a.contains("WordRef `dup`"));
+        assert!(a.contains("TopLevel"));
+        // Sema: user word + effect + call graph + use sites
+        assert!(s.contains("square"));
+        assert!(s.contains("Call graph"));
+        assert!(s.contains("Use sites"));
+        // Effects: square's inferred effect
+        assert!(e.contains("square"));
+    }
+
+    #[test]
+    fn ast_dump_shows_control_flow_structure() {
+        let (_, a, _, _) = dumps(": foo dup 0 < if negate then ;");
+        assert!(a.contains("If"), "expected If node in:\n{a}");
+        assert!(a.contains("then:"));
+    }
+
+    #[test]
+    fn dump_all_concatenates() {
+        let toks = lex("42 .").unwrap();
+        let prog = parse(&toks).unwrap();
+        let sema = build(prog.clone()).unwrap();
+        let all = dump_all(&toks, &prog, &sema, Some(": dummy ir ;"));
+        assert!(all.contains("TOKENS"));
+        assert!(all.contains("AST"));
+        assert!(all.contains("SEMA"));
+        assert!(all.contains("FACTOR IR"));
+    }
+}

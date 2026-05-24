@@ -27,7 +27,8 @@ use std::fmt::Write;
 
 use super::ast::{CaseArm, Definition, Expr, Item, Literal, LoopKind, Program};
 use super::lex::StringKind;
-use super::resolve::{vocabs_needed, Resolved, Target};
+use super::resolve::Target;
+use super::sema::Sema;
 
 /// Emit options.  Defaults are tuned for "send to embedded VM".
 #[derive(Clone, Debug)]
@@ -42,8 +43,29 @@ impl Default for EmitOpts {
     fn default() -> Self { EmitOpts { flush_at_end: true } }
 }
 
+/// Which Factor vocabs the emitted IR needs in its `USING:` clause?
+///
+/// Baseline (always emitted): `kernel`, `math`, `io`, `forth.runtime`.
+/// These cover the emit-time fixed strings the compiler produces
+/// regardless of user code (`kernel:if`, `math:zero?`, `io:flush`,
+/// `forth.runtime:type` from `."` strings).
+///
+/// On top of that, each resolved word reference contributes its
+/// target's vocab.  Returns a sorted, deduplicated list.
+pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
+    let mut set: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+    set.insert("kernel");
+    set.insert("math");
+    set.insert("io");
+    set.insert("forth.runtime");
+    for t in s.word_targets.values() {
+        if let Some(v) = t.vocab() { set.insert(v); }
+    }
+    set.into_iter().collect()
+}
+
 /// Top-level emit entry point.
-pub fn emit(r: &Resolved, opts: &EmitOpts) -> String {
+pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
     let mut out = String::with_capacity(256);
     emit_using_line(r, &mut out);
     // `:` definitions need a target vocab.  Factor's `scratchpad`
@@ -76,14 +98,14 @@ pub fn emit(r: &Resolved, opts: &EmitOpts) -> String {
     out
 }
 
-fn emit_using_line(r: &Resolved, out: &mut String) {
+fn emit_using_line(r: &Sema, out: &mut String) {
     let vocabs = vocabs_needed(r);
     out.push_str("USING:");
     for v in vocabs { out.push(' '); out.push_str(v); }
     out.push_str(" ;\n");
 }
 
-fn emit_definition(d: &Definition, r: &Resolved, out: &mut String) {
+fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
     write!(out, ": {} ", d.name).unwrap();
     if let Some(eff) = &d.effect {
         out.push('(');
@@ -97,7 +119,7 @@ fn emit_definition(d: &Definition, r: &Resolved, out: &mut String) {
     out.push_str(" ;");
 }
 
-fn emit_exprs(exprs: &[Expr], r: &Resolved, out: &mut String) {
+fn emit_exprs(exprs: &[Expr], r: &Sema, out: &mut String) {
     let mut first = true;
     for e in exprs {
         if !first { out.push(' '); }
@@ -106,7 +128,7 @@ fn emit_exprs(exprs: &[Expr], r: &Resolved, out: &mut String) {
     }
 }
 
-fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
+fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
     match e {
         Expr::Lit(Literal::Int { value, .. }) => {
             write!(out, "{value}").unwrap();
@@ -282,7 +304,7 @@ fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
 fn emit_case_chain(
     arms: &[CaseArm],
     default: Option<&[Expr]>,
-    r: &Resolved,
+    r: &Sema,
     out: &mut String,
 ) {
     if let Some((head, tail)) = arms.split_first() {
@@ -331,13 +353,23 @@ fn factor_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::{lex, parse, resolve::resolve};
+    use super::super::{lex, parse, sema::build as build_sema};
 
     fn compile_str(src: &str) -> String {
         let toks = lex(src).unwrap();
         let prog = parse(&toks).unwrap();
-        let r = resolve(prog).unwrap();
-        emit(&r, &EmitOpts::default())
+        let sema = build_sema(prog).unwrap();
+        emit(&sema, &EmitOpts::default())
+    }
+
+    #[test]
+    fn vocabs_needed_includes_runtime_for_dot() {
+        let toks = lex("42 .").unwrap();
+        let prog = parse(&toks).unwrap();
+        let sema = build_sema(prog).unwrap();
+        let v = vocabs_needed(&sema);
+        assert!(v.contains(&"forth.runtime"));
+        assert!(v.contains(&"kernel"));
     }
 
     #[test]
