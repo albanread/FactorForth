@@ -18,17 +18,15 @@
 //! built via scripts/build-image.sh.  Run explicitly with
 //!   `cargo test --test smoke_runtime -- --ignored --nocapture`.
 //!
-//! KNOWN ISSUE: cargo's test runner spawns each test in a fresh OS
-//! thread (for panic isolation), and Factor's VM stores critical
-//! state in TLS that gets initialised in nf_init_factor's calling
-//! thread.  The eval primitive expects to run on that same thread.
-//! From within a cargo-test worker thread the embedding plumbing
-//! works up to init but then crashes on the first eval.  The
-//! `cargo run --bin embed-smoke` binary in src/bin/ does the same
-//! round-trip from main and is the gate that actually verifies the
-//! Phase 1 success criterion.  Real fix: keep all VM access on a
-//! dedicated session thread (Phase 3 work, when the session module
-//! lands).
+//! SERIALIZATION: Factor's VM is NOT thread-safe — and that's fine,
+//! Forth isn't either.  We enforce that by acquiring a process-wide
+//! Mutex in every test before touching the VM.  Cargo may spawn each
+//! test in its own thread, but the mutex serializes the actual VM
+//! work so only one Factor VM is alive at any moment.
+//!
+//! Use `--test-threads=1` regardless when running these tests; the
+//! mutex prevents the worst case but the panic-recovery path of
+//! parallel-test workers can still smear stderr unhelpfully.
 
 #![cfg(target_os = "windows")]
 
@@ -36,6 +34,17 @@ use libloading::{Library, Symbol};
 use std::ffi::{c_char, c_int, c_long, CStr, CString};
 use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+/// Process-wide gate.  Every test that touches the embedded VM
+/// acquires this before doing anything.  Factor's VM is single-
+/// threaded and TLS-resident; concurrent init+eval from two cargo
+/// test workers WILL crash.  This mutex makes parallel-test runs
+/// degrade gracefully (serialise) instead of segfaulting.
+fn vm_gate() -> &'static Mutex<()> {
+    static GATE: OnceLock<Mutex<()>> = OnceLock::new();
+    GATE.get_or_init(|| Mutex::new(()))
+}
 
 /// Opaque types from factor.dll — we never dereference these.
 type FactorVm = c_void;
@@ -120,6 +129,13 @@ unsafe fn eval(api: &NfApi, vm: *mut FactorVm, expr: &str) -> String {
 /// Helper: run a setup-and-eval sequence.  Sets up the VM once, runs
 /// each expression in turn, returns the captured outputs.
 unsafe fn with_vm<F: FnOnce(&NfApi, *mut FactorVm)>(body: F) {
+    // Hold the process-wide VM gate for the lifetime of this call.
+    // We tolerate a poisoned mutex: every test creates its own fresh
+    // VM, so a previous test panicking doesn't corrupt shared state
+    // — we just want serialization.  Without this, one failed assert
+    // would cascade and mask every other test's real result.
+    let _gate = vm_gate().lock().unwrap_or_else(|p| p.into_inner());
+
     let dll = factor_dll_path();
     assert!(dll.exists(), "patched factor.dll not found at {}", dll.display());
 
@@ -226,6 +242,77 @@ fn forth_runtime_variable_roundtrip() {
                  forth.runtime:@ forth.runtime:. flush");
             assert!(out.contains('7'),
                     "expected '7' from variable round-trip, got {out:?}");
+        });
+    }
+}
+
+// ─── Phase 2.3 end-to-end: ANS source → Factor IR → execute ─────────────────
+
+/// Helper: run an ANS Forth source through the compiler, then eval
+/// the resulting Factor IR.  Returns the captured output for assertions.
+unsafe fn compile_and_run(api: &NfApi, vm: *mut FactorVm, ans_source: &str) -> String {
+    let ir = newfactor::compiler::compile(ans_source)
+        .unwrap_or_else(|e| panic!("compile error: {e}\nsource: {ans_source}"));
+    eprintln!("[phase2.3] IR: {ir}");
+    eval(api, vm, &ir)
+}
+
+/// The Phase 2.3 success criterion: a `:` definition compiled by the
+/// Rust front end runs end-to-end on the embedded VM and produces
+/// the right answer.
+///
+///   ANS source : `: square ( n -- n^2 ) dup * ; 5 square .`
+///   Expected output : `25 `
+#[test]
+#[ignore]
+fn phase23_square_word() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": square ( n -- n^2 ) dup * ; 5 square .");
+            assert!(out.contains("25"),
+                    "expected '25' from 5 square, got {out:?}");
+        });
+    }
+}
+
+/// A two-arg user word — exercises stack ordering through the
+/// compiler.  `: add2 + ; 10 32 add2 .` should print `42`.
+#[test]
+#[ignore]
+fn phase23_two_arg_user_word() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": add2 ( a b -- a+b ) + ; 10 32 add2 .");
+            assert!(out.contains("42"), "got {out:?}");
+        });
+    }
+}
+
+/// Negative integer literals survive the lex → parse → emit round
+/// trip.  `-5 dup * .` should print `25` (because dup * = square).
+#[test]
+#[ignore]
+fn phase23_negative_literal() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm, "-5 dup * .");
+            assert!(out.contains("25"), "got {out:?}");
+        });
+    }
+}
+
+/// Multiple definitions, mutual reference — `: inc 1 + ; : twice
+/// inc inc ; 5 twice .` expects `7`.
+#[test]
+#[ignore]
+fn phase23_multiple_definitions() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": inc ( n -- n+1 ) 1 + ; : twice ( n -- n+2 ) inc inc ; 5 twice .");
+            assert!(out.contains("7"), "got {out:?}");
         });
     }
 }

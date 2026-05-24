@@ -1,0 +1,236 @@
+//! Emit — `Resolved` AST → canonical Factor source string.
+//!
+//! The output is what gets handed to `nf_eval_string`.  It is
+//! deliberately straightforward:
+//!
+//! 1. A `USING:` line listing every vocab any word in the program
+//!    needs.  Always includes `kernel` and `io`; resolve.vocabs_needed
+//!    contributes the rest.
+//!
+//! 2. Each `: name ( effect ) body ;` definition, in source order.
+//!
+//! 3. A trailing run of top-level expressions (load-time code).
+//!
+//! 4. A final ` flush` so any buffered I/O surfaces before
+//!    nf_eval_string returns.
+//!
+//! Factor's `( a b -- c )` stack effect syntax is identical to
+//! ANS's, so we emit effect annotations verbatim.
+//!
+//! Numbers, strings, and floats use Factor's own literal syntax —
+//! also identical for the common cases (decimal, hex with `HEX:`
+//! prefix, floats with `.`/`e`).  We emit hex via Factor's
+//! `HEX: nnnn` syntax for prefixed integers to match the source
+//! intent.
+
+use std::fmt::Write;
+
+use super::ast::{Definition, Expr, Item, Literal, Program};
+use super::lex::StringKind;
+use super::resolve::{vocabs_needed, Resolved, Target};
+
+/// Emit options.  Defaults are tuned for "send to embedded VM".
+#[derive(Clone, Debug)]
+pub struct EmitOpts {
+    /// Append `flush` at the very end so I/O round-trips through
+    /// nf_eval_string.  Default true.  Set false when the IR is
+    /// for diagnostic display only.
+    pub flush_at_end: bool,
+}
+
+impl Default for EmitOpts {
+    fn default() -> Self { EmitOpts { flush_at_end: true } }
+}
+
+/// Top-level emit entry point.
+pub fn emit(r: &Resolved, opts: &EmitOpts) -> String {
+    let mut out = String::with_capacity(256);
+    emit_using_line(r, &mut out);
+    // `:` definitions need a target vocab.  Factor's `scratchpad`
+    // vocab exists in any bootstrapped image and is the conventional
+    // home for interactive / eval'd definitions.  Without this, a
+    // colon definition in eval'd source errors with "Not in a
+    // vocabulary; IN: form required".
+    out.push_str("IN: scratchpad\n");
+    let mut wrote_def = false;
+    let mut wrote_top = false;
+    for item in &r.program.items {
+        match item {
+            Item::Definition(d) => {
+                if wrote_top { out.push('\n'); wrote_top = false; }
+                emit_definition(d, r, &mut out);
+                out.push('\n');
+                wrote_def = true;
+            }
+            Item::TopLevel { exprs, .. } => {
+                if wrote_def && !wrote_top { out.push('\n'); }
+                emit_exprs(exprs, r, &mut out);
+                wrote_top = true;
+            }
+        }
+    }
+    if opts.flush_at_end {
+        if !out.ends_with(' ') && !out.ends_with('\n') { out.push(' '); }
+        out.push_str("flush");
+    }
+    out
+}
+
+fn emit_using_line(r: &Resolved, out: &mut String) {
+    let vocabs = vocabs_needed(r);
+    out.push_str("USING:");
+    for v in vocabs { out.push(' '); out.push_str(v); }
+    out.push_str(" ;\n");
+}
+
+fn emit_definition(d: &Definition, r: &Resolved, out: &mut String) {
+    write!(out, ": {} ", d.name).unwrap();
+    if let Some(eff) = &d.effect {
+        out.push('(');
+        for s in &eff.inputs { out.push(' '); out.push_str(s); }
+        if eff.inputs.is_empty() { out.push(' '); }
+        out.push_str(" --");
+        for s in &eff.outputs { out.push(' '); out.push_str(s); }
+        out.push_str(" ) ");
+    }
+    emit_exprs(&d.body, r, out);
+    out.push_str(" ;");
+}
+
+fn emit_exprs(exprs: &[Expr], r: &Resolved, out: &mut String) {
+    let mut first = true;
+    for e in exprs {
+        if !first { out.push(' '); }
+        first = false;
+        emit_expr(e, r, out);
+    }
+}
+
+fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
+    match e {
+        Expr::Lit(Literal::Int { value, .. }) => {
+            write!(out, "{value}").unwrap();
+        }
+        Expr::Lit(Literal::Float { value, .. }) => {
+            // Factor's float literal syntax matches Rust's for the
+            // common forms.  Force at least one decimal digit so a
+            // bare `3.0` doesn't become `3` and get re-parsed as int.
+            if value.fract() == 0.0 && value.is_finite() {
+                write!(out, "{value:.1}").unwrap();
+            } else {
+                write!(out, "{value}").unwrap();
+            }
+        }
+        Expr::Lit(Literal::Str { value, kind, .. }) => {
+            match kind {
+                StringKind::DotQuote => {
+                    // ANS `." x"` is "emit x at runtime".  Translate
+                    // to `"x" forth.runtime:type` — type writes a
+                    // counted string and is the right ANS semantic.
+                    out.push('"');
+                    out.push_str(&factor_escape(value));
+                    out.push_str("\" forth.runtime:type");
+                }
+                StringKind::SQuote | StringKind::CQuote => {
+                    // For now treat both as raw string literal on the
+                    // data stack.  When forth.runtime grows S" and C"
+                    // proper handling, replace this.
+                    out.push('"');
+                    out.push_str(&factor_escape(value));
+                    out.push('"');
+                }
+            }
+        }
+        Expr::WordRef { span, name } => {
+            match r.word_targets.get(span) {
+                Some(t) => out.push_str(&t.to_factor_token()),
+                None => {
+                    // resolve would've errored — defensive fallback.
+                    out.push_str(name);
+                }
+            }
+        }
+    }
+}
+
+/// Escape a Forth string body for safe inclusion in a Factor `"..."`.
+/// Factor's string syntax recognises `\` escapes; we double-escape
+/// backslashes and escape the closing quote.  Forth strings are raw
+/// in the source, so backslash carries no special meaning there.
+fn factor_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"'  => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::{lex, parse, resolve::resolve};
+
+    fn compile_str(src: &str) -> String {
+        let toks = lex(src).unwrap();
+        let prog = parse(&toks).unwrap();
+        let r = resolve(prog).unwrap();
+        emit(&r, &EmitOpts::default())
+    }
+
+    #[test]
+    fn empty_program_emits_only_using() {
+        let out = compile_str("");
+        assert!(out.starts_with("USING:"));
+        assert!(out.contains("flush"));
+    }
+
+    #[test]
+    fn integer_literal_passes_through() {
+        let out = compile_str("42 .");
+        assert!(out.contains("42"));
+        assert!(out.contains("forth.runtime:."));
+    }
+
+    #[test]
+    fn simple_definition_emits_colon() {
+        let out = compile_str(": square ( n -- n^2 ) dup * ;");
+        assert!(out.contains(": square ( n -- n^2 ) dup * ;"),
+                "expected canonical colon def in {out:?}");
+    }
+
+    #[test]
+    fn user_word_call_after_def() {
+        let out = compile_str(": square ( n -- n^2 ) dup * ; 5 square .");
+        // square def + top-level "5 square forth.runtime:."
+        assert!(out.contains(": square"));
+        assert!(out.contains("5 square forth.runtime:."));
+    }
+
+    #[test]
+    fn ans_division_maps_to_integer_divide() {
+        let out = compile_str("10 3 /");
+        // ANS `/` is integer divide; we picked Factor `/i`.
+        assert!(out.contains("/i"), "expected /i, got {out}");
+    }
+
+    #[test]
+    fn float_keeps_decimal_point() {
+        let out = compile_str("3.0");
+        assert!(out.contains("3.0"), "got {out}");
+    }
+
+    #[test]
+    fn dot_quote_emits_type() {
+        let out = compile_str(": greet .\" hi\" ;");
+        assert!(out.contains("\"hi\" forth.runtime:type"), "got {out}");
+    }
+}

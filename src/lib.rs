@@ -15,12 +15,11 @@
 
 #![doc(html_no_source)]
 
-// Modules will be added in order as phases land.
-// pub mod session;
-// pub mod compiler;
-// pub mod runtime;
-// pub mod error;
-// pub mod ffi;
+// Modules added in order as phases land.
+pub mod compiler;
+// pub mod session;   // Phase 3
+// pub mod runtime;   // Phase 3
+// pub mod ffi;       // Phase 3
 
 /// Crate identifier — Phase 0 placeholder so `cargo check` has something
 /// concrete to compile.  Replaced by real surface in Phase 1.
