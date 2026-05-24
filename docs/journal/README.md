@@ -45,3 +45,8 @@ in six months).
   quotation arguments, and three LEAVE designs — only the
   flag-based one preserves the accumulator that ANS code keeps
   on the data stack across iterations.
+- `2026-05-24-m2.6-case.md` — M2.6 CASE.  Structurally easy
+  (recursive nested-IF chain); surfaced a latent vocabs_needed
+  bug where emit-time fixed-string vocabs (forth.runtime,
+  kernel, math, io) weren't always brought into USING:.  Fix
+  was hardcoding them as baseline; cleaner refactor deferred.

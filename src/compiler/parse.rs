@@ -272,10 +272,12 @@ impl<'t> Parser<'t> {
                     "begin" => { self.bump(); self.parse_begin(t_span) }
                     "do"    => { self.bump(); self.parse_do(t_span, false) }
                     "?do"   => { self.bump(); self.parse_do(t_span, true)  }
+                    "case"  => { self.bump(); self.parse_case(t_span) }
                     // Terminators leaking through to here means they
                     // weren't inside a matching opener.
                     "else" | "then" | "until" | "while" | "repeat"
-                    | "again" | "loop" | "+loop" => {
+                    | "again" | "loop" | "+loop"
+                    | "of" | "endof" | "endcase" => {
                         Err(ParseError::StrayControlWord {
                             word: lc, at: t_span,
                         })
@@ -362,6 +364,56 @@ impl<'t> Parser<'t> {
         Ok(Expr::DoLoop {
             is_qdo, body, loop_kind,
             span: Span { start: do_span.start, end: term.span.end },
+        })
+    }
+
+    /// Parse `CASE ... ENDCASE`.  Caller has consumed the `case`
+    /// token at `case_span`.
+    ///
+    /// Each round either:
+    ///   - sees `OF`: the just-parsed expressions are the match expr
+    ///     for a new arm; then parse the arm body up to `ENDOF`.
+    ///   - sees `ENDCASE`: the just-parsed expressions (possibly
+    ///     empty) are the default branch; we're done.
+    ///
+    /// Nested CASEs inside an arm body are absorbed by `expr_one`'s
+    /// recursive call back into `parse_case`.
+    fn parse_case(&mut self, case_span: Span) -> Result<Expr, ParseError> {
+        let mut arms: Vec<CaseArm> = Vec::new();
+        let mut default: Option<Vec<Expr>> = None;
+        let end_span;
+        loop {
+            let (exprs, term) = self.parse_block_until(
+                "case", case_span, &["of", "endcase"],
+            )?;
+            let term_word = match &term.kind {
+                Tok::Word(w) => w.to_ascii_lowercase(),
+                _ => unreachable!(),
+            };
+            if term_word == "of" {
+                // exprs is the match expr for the upcoming arm.
+                let arm_start = exprs.first().map(|e| e.span())
+                    .unwrap_or(term.span);
+                let (body, endof) = self.parse_block_until(
+                    "of", term.span, &["endof"],
+                )?;
+                arms.push(CaseArm {
+                    match_expr: exprs,
+                    body,
+                    span: Span { start: arm_start.start, end: endof.span.end },
+                });
+            } else {
+                // endcase: exprs is the default (may be empty).
+                if !exprs.is_empty() {
+                    default = Some(exprs);
+                }
+                end_span = term.span;
+                break;
+            }
+        }
+        Ok(Expr::Case {
+            arms, default,
+            span: Span { start: case_span.start, end: end_span.end },
         })
     }
 
@@ -695,5 +747,82 @@ mod tests {
     fn unterminated_do_rejected() {
         let err = parse_str(": foo 10 0 do i + ;").unwrap_err();
         assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "do"));
+    }
+
+    // ── CASE/OF/ENDOF/ENDCASE parsing (M2.6) ───────────────────────
+
+    #[test]
+    fn case_two_arms_no_default() {
+        let prog = parse_str(
+            ": classify case 1 of .\" one\" endof 2 of .\" two\" endof endcase ;"
+        ).unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, default, .. } = d.body.last().unwrap() else {
+            panic!("expected Case");
+        };
+        assert_eq!(arms.len(), 2);
+        assert!(default.is_none());
+        // arm 0: match_expr [1], body [."one"]
+        let a0 = &arms[0];
+        assert_eq!(a0.match_expr.len(), 1);
+        assert!(matches!(&a0.match_expr[0], Expr::Lit(Literal::Int { value: 1, .. })));
+        assert_eq!(a0.body.len(), 1);
+    }
+
+    #[test]
+    fn case_with_default() {
+        let prog = parse_str(
+            ": c case 1 of .\" one\" endof .\" other\" endcase ;"
+        ).unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, default, .. } = d.body.last().unwrap() else { panic!() };
+        assert_eq!(arms.len(), 1);
+        let def = default.as_ref().expect("default present");
+        assert_eq!(def.len(), 1);
+    }
+
+    #[test]
+    fn case_complex_match_expr() {
+        // Match value computed at runtime: `2 *` means "match-against
+        // 2 times the previously-pushed value".  ANS allows this.
+        let prog = parse_str(": c case 2 * of 1 endof endcase ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, .. } = d.body.last().unwrap() else { panic!() };
+        // The match_expr has TWO expressions: 2, *
+        assert_eq!(arms[0].match_expr.len(), 2);
+    }
+
+    #[test]
+    fn nested_case() {
+        let prog = parse_str(
+            ": c case 1 of case 11 of .\" 11\" endof endcase endof endcase ;"
+        ).unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, .. } = d.body.last().unwrap() else { panic!() };
+        // outer arm body should contain a nested Case
+        assert!(arms[0].body.iter().any(|e| matches!(e, Expr::Case { .. })),
+                "expected nested Case in outer arm");
+    }
+
+    #[test]
+    fn empty_case() {
+        // Vacuous CASE — just drops the dispatch value.  ANS permits it.
+        let prog = parse_str(": c case endcase ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, default, .. } = d.body.last().unwrap() else { panic!() };
+        assert!(arms.is_empty());
+        assert!(default.is_none());
+    }
+
+    #[test]
+    fn stray_endof_rejected() {
+        let err = parse_str(": foo endof ;").unwrap_err();
+        assert!(matches!(err, ParseError::StrayControlWord { ref word, .. } if word == "endof"));
+    }
+
+    #[test]
+    fn unterminated_case_rejected() {
+        let err = parse_str(": foo case 1 of .\" hi\" endof ;").unwrap_err();
+        assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "case"));
     }
 }

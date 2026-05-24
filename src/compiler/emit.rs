@@ -25,7 +25,7 @@
 
 use std::fmt::Write;
 
-use super::ast::{Definition, Expr, Item, Literal, LoopKind, Program};
+use super::ast::{CaseArm, Definition, Expr, Item, Literal, LoopKind, Program};
 use super::lex::StringKind;
 use super::resolve::{vocabs_needed, Resolved, Target};
 
@@ -251,6 +251,59 @@ fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
                 out.push_str("forth.runtime:do-loop");
             }
         }
+
+        // ── CASE/OF/ENDOF/ENDCASE ──────────────────────────────────
+        //
+        // Emit as a nested IF chain, recursing through arms.  The
+        // dispatch value sits on the data stack at CASE entry; each
+        // arm dups it for comparison and drops both copies on match.
+        // ENDCASE's drop fires in the innermost else, where the
+        // dispatch value has survived all OF tests.
+        //
+        // Shape:
+        //   dup MATCH0 = [ drop BODY0 ] [
+        //     dup MATCH1 = [ drop BODY1 ] [
+        //       ...
+        //         DEFAULT? drop
+        //     ] kernel:if
+        //   ] kernel:if
+        //
+        // No arms + no default → just `drop` (an ANS-vacuous CASE).
+        Expr::Case { arms, default, .. } => {
+            emit_case_chain(arms, default.as_deref(), r, out);
+        }
+    }
+}
+
+/// Recursive helper for `Expr::Case`.  Splits the arms list head/tail,
+/// emits a `dup MATCH = [ drop BODY ] [ <rest> ] if` per arm, with
+/// the base case being the default branch (if any) followed by the
+/// single ENDCASE-drop.
+fn emit_case_chain(
+    arms: &[CaseArm],
+    default: Option<&[Expr]>,
+    r: &Resolved,
+    out: &mut String,
+) {
+    if let Some((head, tail)) = arms.split_first() {
+        out.push_str("dup ");
+        emit_exprs(&head.match_expr, r, out);
+        out.push_str(" = [ drop ");
+        emit_exprs(&head.body, r, out);
+        out.push_str(" ] [ ");
+        emit_case_chain(tail, default, r, out);
+        out.push_str(" ] kernel:if");
+    } else {
+        // Base case: no more arms.  Run default if any, then drop
+        // the dispatch value (ENDCASE's job).
+        if let Some(d) = default {
+            emit_exprs(d, r, out);
+            // Convention: default leaves the dispatch value on top
+            // for ENDCASE to drop.  If it didn't, the trailing drop
+            // will underflow at runtime — same as ANS would.
+            out.push(' ');
+        }
+        out.push_str("kernel:drop");
     }
 }
 

@@ -134,6 +134,41 @@ pub enum Expr {
         loop_kind: LoopKind,
         span: Span,
     },
+
+    /// `n CASE  v1 OF body1 ENDOF  v2 OF body2 ENDOF  [default]  ENDCASE`.
+    ///
+    /// Each `CaseArm` carries the expressions that produce the match
+    /// value (before `OF`) and the body (between `OF` and `ENDOF`).
+    /// `default` is the optional run-of-expressions between the last
+    /// `ENDOF` and `ENDCASE`.
+    ///
+    /// ANS semantics:
+    ///   - At runtime the dispatch value is on the stack at CASE entry.
+    ///   - Each OF dups the dispatch, compares, and on match drops both
+    ///     copies and runs the body, then jumps past ENDCASE.
+    ///   - On mismatch, the dup is consumed by `=`, the dispatch
+    ///     remains; control falls through to the next OF.
+    ///   - If no OF matches, the default (if any) runs with the
+    ///     dispatch value still on the stack.
+    ///   - ENDCASE drops the dispatch value.  Convention: default
+    ///     leaves it on the stack for ENDCASE to drop.
+    Case {
+        arms: Vec<CaseArm>,
+        default: Option<Vec<Expr>>,
+        span: Span,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaseArm {
+    /// Expressions before `OF` that produce the match value on the
+    /// stack at OF time.  Often a single literal, but ANS allows any
+    /// expression here.
+    pub match_expr: Vec<Expr>,
+    /// Expressions between `OF` and `ENDOF`.
+    pub body: Vec<Expr>,
+    /// Span from this arm's first match-expr token through `ENDOF`.
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +198,7 @@ impl Expr {
             Expr::BeginWhileRepeat { span, .. } => *span,
             Expr::BeginAgain       { span, .. } => *span,
             Expr::DoLoop           { span, .. } => *span,
+            Expr::Case             { span, .. } => *span,
         }
     }
 }

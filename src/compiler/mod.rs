@@ -24,7 +24,7 @@ pub mod lex;
 pub mod parse;
 pub mod resolve;
 
-pub use ast::{Definition, Expr, Item, Literal, LoopKind, Program, StackEffect};
+pub use ast::{CaseArm, Definition, Expr, Item, Literal, LoopKind, Program, StackEffect};
 pub use emit::{emit, EmitOpts};
 pub use error::{CompileError, Pos, Span};
 pub use lex::{lex, NumBase, StringKind, Tok, Token};

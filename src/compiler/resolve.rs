@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use super::ast::{Definition, Expr, Item, Literal, Program};
+use super::ast::{CaseArm, Definition, Expr, Item, Literal, Program};
 use super::error::Span;
 
 /// Which Factor name to emit for a given ANS word.
@@ -254,6 +254,15 @@ fn resolve_exprs(
             Expr::DoLoop { body, .. } => {
                 resolve_exprs(body, builtins, user_words, out)?;
             }
+            Expr::Case { arms, default, .. } => {
+                for arm in arms {
+                    resolve_exprs(&arm.match_expr, builtins, user_words, out)?;
+                    resolve_exprs(&arm.body, builtins, user_words, out)?;
+                }
+                if let Some(d) = default {
+                    resolve_exprs(d, builtins, user_words, out)?;
+                }
+            }
         }
     }
     Ok(())
@@ -275,12 +284,22 @@ pub(crate) fn factor_user_name(ans_lc: &str) -> String {
 
 /// Helper for emit.rs: which vocabs does this resolved program need
 /// to import in its `USING:` clause?  Returns a sorted, deduplicated
-/// list.  Always includes `kernel` and `io` (for `flush` on the
-/// driver path) so callers don't need to plumb those separately.
+/// list.
+///
+/// The baseline set is what emit-time fixed strings can reach for:
+///   - `kernel`        for `if`, `when`, `loop`, `drop`, `t`/`f`
+///   - `math`          for `zero?` used inside control-flow emit
+///   - `io`            for `flush` appended by the emit driver
+///   - `forth.runtime` for `:.` `:type` etc. emitted from `."` strings
+///                     and from the always-fully-qualified ANS I/O
+///
+/// resolve.rs then adds vocabs reached by user word references.
 pub fn vocabs_needed(r: &Resolved) -> Vec<&'static str> {
     let mut set: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
     set.insert("kernel");
+    set.insert("math");
     set.insert("io");
+    set.insert("forth.runtime");
     for t in r.word_targets.values() {
         if let Some(v) = t.vocab() { set.insert(v); }
     }

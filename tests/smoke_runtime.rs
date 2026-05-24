@@ -531,6 +531,90 @@ fn phase25_nested_i_and_j() {
     }
 }
 
+// ─── Phase 2.6 — CASE/OF/ENDOF/ENDCASE ──────────────────────────────────────
+
+/// CASE arm dispatch — input 2 should hit the "two" arm.
+#[test]
+#[ignore]
+fn phase26_case_arm_dispatch() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": classify ( n -- ) \
+                       case \
+                         1 of .\" one\"   endof \
+                         2 of .\" two\"   endof \
+                         3 of .\" three\" endof \
+                         .\" unknown\" \
+                       endcase ; \
+                       2 classify";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("two") && !out.contains("one") && !out.contains("three"),
+                    "expected only 'two', got {out:?}");
+        });
+    }
+}
+
+/// Default branch when nothing matches.  Input 99 falls through to
+/// the default — should print "unknown".
+#[test]
+#[ignore]
+fn phase26_case_default_fires() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": classify ( n -- ) \
+                       case \
+                         1 of .\" one\" endof \
+                         2 of .\" two\" endof \
+                         .\" unknown\" \
+                       endcase ; \
+                       99 classify";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("unknown"), "expected 'unknown', got {out:?}");
+        });
+    }
+}
+
+/// CASE with no default and no match: dispatch value is dropped at
+/// ENDCASE, nothing printed.  Verify the program completes without
+/// underflow and surrounding text bookends are visible.
+#[test]
+#[ignore]
+fn phase26_case_no_match_no_default() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": maybe ( n -- ) \
+                       case \
+                         1 of .\" one\" endof \
+                       endcase ; \
+                       .\" [\" 7 maybe .\" ]\"";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("[") && out.contains("]"),
+                    "expected bracketing, got {out:?}");
+            assert!(!out.contains("one"), "should not have matched, got {out:?}");
+        });
+    }
+}
+
+/// CASE used as a value-producing dispatch.  Each arm pushes a
+/// different code; default pushes 0.
+#[test]
+#[ignore]
+fn phase26_case_returns_value() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": code ( n -- c ) \
+                       case \
+                         1 of 100 endof \
+                         2 of 200 endof \
+                         drop 0 \
+                       endcase ; \
+                       2 code .";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("200"), "expected 200, got {out:?}");
+        });
+    }
+}
+
 /// `LEAVE` flags the loop for exit at iteration boundary.  The
 /// flag-based implementation requires LEAVE at the end of the
 /// iteration body (the common ANS idiom) — code AFTER `leave` in
