@@ -1,25 +1,20 @@
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock      # binary, not library — exclude per workspace convention
+# Cargo.lock IS committed: this crate produces binaries (newfactor,
+# newfactor-ui) and the Rust convention is to commit the lockfile for
+# binary-producing crates so builds are reproducible.
 
-# Build artifacts
+# VM build artifacts
 vm-build/vm/*.obj
 vm-build/factor.dll
 vm-build/factor.dll.lib
 vm-build/factor.dll.exp
 vm-build/*.exe
+vm-build/*.pdb
 
 # Image artifacts (large, regenerable via scripts/build-image.sh)
 *.image
-images/*.image
-
-# Stock Factor install leftovers in the project root (will be cleaned out separately)
-factor.dll
-factor.image
-libcrypto-*.dll
-libssl-*.dll
-sqlite3.dll
 
 # Logs and scratch
 *.log
@@ -28,7 +23,6 @@ sqlite3.dll
 test_*.txt
 nf_diag*.txt
 nf_test_*.txt
-slim-bootstrap.*
 
 # OS-level
 Thumbs.db
