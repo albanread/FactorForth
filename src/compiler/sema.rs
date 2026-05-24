@@ -42,8 +42,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::ast::{
-    CollectionDef, ConstantDef, CreateDef, Expr, Item, Program, VariableDef,
+    CollectionDef, ConstantDef, CreateDef, Expr, Item, Literal, Program,
+    TemplateDef, TemplateInstanceDef, VariableDef,
 };
+use super::error::Pos;
 use super::effect::{infer, Effect, EffectError};
 use super::error::Span;
 use super::resolve::{resolve, ResolveError, Target};
@@ -118,6 +120,12 @@ pub struct Sema {
     /// cbuffer) keyed by lowercase name.  Sema's primary view of
     /// what user-named collections exist.
     pub collections: BTreeMap<String, CollectionDef>,
+    /// User-defined CREATE/DOES> templates keyed by lowercase name.
+    /// Each template can be instantiated at TopLevel by writing
+    /// `<args> templatename <newname>`; expand_templates walks
+    /// TopLevels and replaces those triples with TemplateInstance
+    /// items.
+    pub templates: BTreeMap<String, TemplateDef>,
 
     // ── From effect ──────────────────────────────────────────────
     /// Callers' view of a word's effect: declared if present, else
@@ -148,6 +156,11 @@ pub struct Sema {
 /// proceed without word mapping); effect errors are collected but
 /// don't stop the build (callers may want to dump partial results).
 pub fn build(program: Program) -> Result<Sema, ResolveError> {
+    // Template expansion runs BEFORE resolve.  Each `<n>
+    // templatename <newname>` triple in TopLevel becomes an
+    // Item::TemplateInstance.  resolve then sees a normal
+    // program where `<newname>` is a registered user word.
+    let program = expand_templates_pre_resolve(program);
     let resolved = resolve(program)?;
     let (inferred, effect_errors) = infer(&resolved);
 
@@ -179,6 +192,7 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
     let mut constants: BTreeMap<String, ConstantDef> = BTreeMap::new();
     let mut creates:   BTreeMap<String, CreateDef>   = BTreeMap::new();
     let mut collections: BTreeMap<String, CollectionDef> = BTreeMap::new();
+    let mut templates: BTreeMap<String, TemplateDef> = BTreeMap::new();
     for item in &resolved.program.items {
         match item {
             Item::Variable(v) => {
@@ -193,6 +207,9 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
             Item::Collection(cl) => {
                 collections.insert(cl.name.to_ascii_lowercase(), cl.clone());
             }
+            Item::Template(t) => {
+                templates.insert(t.name.to_ascii_lowercase(), t.clone());
+            }
             _ => {}
         }
     }
@@ -205,6 +222,7 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
         constants,
         creates,
         collections,
+        templates,
         user_effects: inferred.user_effects,
         body_effects: inferred.body_effects,
         effect_errors,
@@ -218,6 +236,127 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
 
     Ok(sema)
 }
+
+/// Standalone version of template expansion that runs BEFORE
+/// resolve, so resolve sees the program with TemplateInstance
+/// items already in place (giving `<newname>` a registered
+/// dictionary entry).
+fn expand_templates_pre_resolve(program: Program) -> Program {
+    // Collect templates from the program first.
+    let templates: BTreeMap<String, TemplateDef> = program.items.iter()
+        .filter_map(|i| match i {
+            Item::Template(t) => Some((t.name.to_ascii_lowercase(), t.clone())),
+            _ => None,
+        })
+        .collect();
+    if templates.is_empty() { return program; }
+
+    let mut new_items: Vec<Item> = Vec::with_capacity(program.items.len());
+    for item in program.items {
+        match item {
+            Item::TopLevel { exprs, span } => {
+                expand_toplevel(exprs, span, &templates, &mut new_items);
+            }
+            other => new_items.push(other),
+        }
+    }
+    Program { items: new_items }
+}
+
+fn expand_toplevel(
+    exprs: Vec<Expr>,
+    span: super::error::Span,
+    templates: &BTreeMap<String, TemplateDef>,
+    out: &mut Vec<Item>,
+) {
+    let mut current: Vec<Expr> = Vec::new();
+    let mut i = 0;
+    while i < exprs.len() {
+        // Recognise template at position i?
+        let tmpl = match &exprs[i] {
+            Expr::WordRef { name, .. } => {
+                templates.get(&name.to_ascii_lowercase())
+            }
+            _ => None,
+        };
+        if let Some(tmpl) = tmpl {
+            // Need a literal int before and a WordRef after.
+            let count_lit = current.last().and_then(|e| match e {
+                Expr::Lit(Literal::Int { value, .. }) if *value >= 0 => Some(*value as u32),
+                _ => None,
+            });
+            let name_after = exprs.get(i + 1).and_then(|e| match e {
+                Expr::WordRef { name, span } => Some((name.clone(), *span)),
+                _ => None,
+            });
+            if let (Some(count), Some((newname, newname_span))) = (count_lit, name_after) {
+                // Consume the count from `current`.
+                let count_expr = current.pop().unwrap();
+                // Flush any leftover `current` as a TopLevel.
+                flush_current(&mut current, out);
+                // Compute allocated bytes from the template constructor.
+                let bytes = compute_alloc_bytes(tmpl, count);
+                out.push(Item::TemplateInstance(TemplateInstanceDef {
+                    name: newname,
+                    name_span: newname_span,
+                    template_name: tmpl.name.clone(),
+                    allocated_bytes: bytes,
+                    does_body: tmpl.does_body.clone(),
+                    span: super::error::Span {
+                        start: count_expr.span().start,
+                        end: newname_span.end,
+                    },
+                }));
+                i += 2;  // skip template-name + new-name
+                continue;
+            }
+            // Template name without the expected adjacents — treat
+            // as a regular word reference (will likely error at
+            // emit/runtime, but pass through here).
+        }
+        current.push(exprs[i].clone());
+        i += 1;
+    }
+    flush_current(&mut current, out);
+    let _ = span;  // not needed once we've split the TopLevel
+}
+
+fn flush_current(current: &mut Vec<Expr>, out: &mut Vec<Item>) {
+    if current.is_empty() { return; }
+    let first_span = current.first().unwrap().span();
+    let last_span  = current.last().unwrap().span();
+    out.push(Item::TopLevel {
+        exprs: std::mem::take(current),
+        span: super::error::Span {
+            start: first_span.start,
+            end: last_span.end,
+        },
+    });
+}
+
+/// Inspect a template's constructor to determine how many bytes
+/// per "unit" the user wants.  First-cut grammar:
+///   contains `cells` or `floats` → 8 bytes per unit
+///   contains `chars`             → 1 byte  per unit
+///   otherwise (raw `allot`)      → 1 byte per unit
+fn compute_alloc_bytes(tmpl: &TemplateDef, count: u32) -> u32 {
+    let mut unit: u32 = 1;
+    for e in &tmpl.constructor {
+        if let Expr::WordRef { name, .. } = e {
+            let lc = name.to_ascii_lowercase();
+            match lc.as_str() {
+                "cells" | "floats" => unit = 8,
+                "chars"            => unit = 1,
+                _ => {}
+            }
+        }
+    }
+    count.saturating_mul(unit).max(1)
+}
+
+// Helper so file-level imports don't need extra modifications.
+#[allow(dead_code)]
+fn _unused_pos_import_anchor(_: Pos) {}
 
 /// Whole-program walk: who calls whom, and where every word is referenced.
 ///
@@ -242,6 +381,17 @@ fn analyse_call_graph(sema: &mut Sema) {
             // expressions to walk.
             Item::Variable(_) | Item::Constant(_)
             | Item::Create(_) | Item::Collection(_) => {}
+            // Templates carry constructor + does_body; instances
+            // carry their captured does_body.
+            Item::Template(t) => {
+                let lc = t.name.to_ascii_lowercase();
+                walk_body_for_refs(&t.constructor, Some(&lc), sema);
+                walk_body_for_refs(&t.does_body,   Some(&lc), sema);
+            }
+            Item::TemplateInstance(ti) => {
+                let lc = ti.name.to_ascii_lowercase();
+                walk_body_for_refs(&ti.does_body, Some(&lc), sema);
+            }
         }
     }
 }
@@ -290,6 +440,13 @@ pub fn analyse_escape(sema: &mut Sema) {
             Item::TopLevel { exprs, .. } => walk_block_for_escape(exprs, &var_names, sema),
             Item::Variable(_) | Item::Constant(_)
             | Item::Create(_) | Item::Collection(_) => {}
+            Item::Template(t) => {
+                walk_block_for_escape(&t.constructor, &var_names, sema);
+                walk_block_for_escape(&t.does_body,   &var_names, sema);
+            }
+            Item::TemplateInstance(ti) => {
+                walk_block_for_escape(&ti.does_body, &var_names, sema);
+            }
         }
     }
 }

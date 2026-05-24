@@ -238,6 +238,9 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("char+", e(1, 1));
     m.insert("cells", e(1, 1));
     m.insert("chars", e(1, 1));
+    m.insert("floats", e(1, 1));
+    m.insert("allot", e(1, 0));
+    m.insert("here",  e(0, 1));
 
     // Float memory ops
     m.insert("f@", e(1, 1));
@@ -309,6 +312,22 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
                 // take an index and return the address of that
                 // element.  Net effect (1 -- 1).
                 user_effects.insert(cl.name.to_ascii_lowercase(), Effect::known(1, 1));
+            }
+            Item::Template(t) => {
+                // A template name on its own does nothing meaningful
+                // when called (it expects to be in instantiation
+                // position).  Effectively a parser-level marker
+                // here.  Register as (0 -- 0) so any stray reference
+                // doesn't poison its caller's inference.
+                user_effects.insert(t.name.to_ascii_lowercase(), Effect::known(0, 0));
+            }
+            Item::TemplateInstance(ti) => {
+                // Same as Collection: ( idx -- addr ).  (For
+                // templates that aren't indexed accessors, the
+                // does_body might have a different effect; we
+                // approximate as (1 -- 1) for now since the common
+                // case is array-like.)
+                user_effects.insert(ti.name.to_ascii_lowercase(), Effect::known(1, 1));
             }
             Item::TopLevel { .. } => {}
         }

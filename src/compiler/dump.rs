@@ -145,6 +145,16 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
                              if cl.count == 1 { "" } else { "s" },
                              span_str(&cl.span));
         }
+        Item::Template(t) => {
+            let _ = writeln!(out, "{indent}Template `{}` ({} ctor, {} does) @ {}",
+                             t.name, t.constructor.len(), t.does_body.len(),
+                             span_str(&t.span));
+        }
+        Item::TemplateInstance(ti) => {
+            let _ = writeln!(out, "{indent}TemplateInstance `{}` from `{}` ({} bytes) @ {}",
+                             ti.name, ti.template_name, ti.allocated_bytes,
+                             span_str(&ti.span));
+        }
     }
 }
 

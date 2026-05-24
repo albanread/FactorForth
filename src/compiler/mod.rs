@@ -30,7 +30,7 @@ pub mod sema;
 pub use ast::{
     CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
     ConstantDef, CreateDef, Definition, Expr, Item, Literal, LoopKind,
-    Program, StackEffect, VariableDef,
+    Program, StackEffect, TemplateDef, TemplateInstanceDef, VariableDef,
 };
 pub use effect::{infer, Effect, EffectError, Inferred};
 pub use emit::{emit, EmitOpts};

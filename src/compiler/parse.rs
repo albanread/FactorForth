@@ -100,6 +100,13 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Result of parsing a `:` definition.  Most are plain Definitions;
+/// those containing both CREATE and DOES> become Templates.
+pub enum ColonResult {
+    Def(Definition),
+    Template(TemplateDef),
+}
+
 /// Conversion for the eventual unified error type.
 impl From<ParseError> for CompileError {
     fn from(_: ParseError) -> Self {
@@ -179,8 +186,10 @@ impl<'t> Parser<'t> {
             match opener.as_deref() {
                 Some(":") => {
                     flush_pending(&mut items, &mut pending, &mut pending_start);
-                    let def = self.colon_definition()?;
-                    items.push(Item::Definition(def));
+                    match self.colon_definition()? {
+                        ColonResult::Def(d)      => items.push(Item::Definition(d)),
+                        ColonResult::Template(t) => items.push(Item::Template(t)),
+                    }
                 }
                 Some(";") => {
                     return Err(ParseError::StraySemicolon { at: t.span });
@@ -365,7 +374,9 @@ impl<'t> Parser<'t> {
     }
 
     /// Already at the `:` token.  Consumes through the matching `;`.
-    fn colon_definition(&mut self) -> Result<Definition, ParseError> {
+    /// Returns either a regular Definition or a Template, depending
+    /// on whether the body contained both CREATE and DOES>.
+    fn colon_definition(&mut self) -> Result<ColonResult, ParseError> {
         let colon = self.bump().expect("colon present");
         let colon_span = colon.span;
 
@@ -423,10 +434,36 @@ impl<'t> Parser<'t> {
             }
         }
 
-        Ok(Definition {
-            name, name_span, effect, body,
-            span: Span { start: colon_span.start, end: end_span.end },
-        })
+        let span = Span { start: colon_span.start, end: end_span.end };
+
+        // Detect template shape: the body contains both `create`
+        // and `does>` (case-insensitive).  If so, split and emit
+        // Item::Template instead of Item::Definition.
+        let create_at = body.iter().position(|e| matches!(e,
+            Expr::WordRef { name: n, .. } if n.eq_ignore_ascii_case("create")));
+        let does_at = body.iter().position(|e| matches!(e,
+            Expr::WordRef { name: n, .. } if n.eq_ignore_ascii_case("does>")));
+        match (create_at, does_at) {
+            (Some(ci), Some(di)) if ci < di => {
+                // Constructor = exprs strictly between CREATE and DOES>.
+                // (Anything before CREATE is "pre-create setup" — rare,
+                // we don't yet model it.  Anything after DOES> is the
+                // runtime body.)
+                let constructor: Vec<Expr> =
+                    body.iter().skip(ci + 1).take(di - ci - 1).cloned().collect();
+                let does_body: Vec<Expr> =
+                    body.iter().skip(di + 1).cloned().collect();
+                return Ok(ColonResult::Template(TemplateDef {
+                    name, name_span, effect,
+                    constructor, does_body, span,
+                }));
+            }
+            _ => {}
+        }
+        // Default: regular `: name body ;` definition.
+        Ok(ColonResult::Def(Definition {
+            name, name_span, effect, body, span,
+        }))
     }
 
     /// Parse a single expression: literal, word-ref, or a structured

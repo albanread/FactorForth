@@ -95,3 +95,11 @@ in six months).
   base-switching (hex/decimal/binary/octal), `n>$` convenience,
   and a lexer paper-cut where `#S` had been misparsed as a
   malformed decimal-prefix number.
+- `2026-05-24-m2.9b-templates.md` — M2.9b CREATE/DOES> as
+  templates.  `:` definitions containing both CREATE and DOES>
+  parse as Item::Template; `<n> name <newname>` triples in
+  TopLevel are folded into Item::TemplateInstance by a
+  pre-resolve sema pass.  Emit produces SYMBOL + buffer +
+  accessor with the captured does_body inlined and `+`
+  translated to `nf-addr+`.  Two ordering bugs (expand-after-
+  resolve, row-vars-vs-concrete-effect) caught and fixed.

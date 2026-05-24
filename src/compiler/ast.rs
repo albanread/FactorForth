@@ -65,6 +65,58 @@ pub enum Item {
     /// then uses `@`/`!` (array), `f@`/`f!` (farray), or `c@`/`c!`
     /// (cbuffer) to access the element.
     Collection(CollectionDef),
+
+    /// A `:` definition containing both CREATE and DOES> — a
+    /// defining-word template.  Captured at parse time; expanded
+    /// at sema time when user code writes `<args> name <newname>`.
+    ///
+    /// Conceptually this is a closure factory:
+    ///   - `constructor` runs at instantiation time, consuming
+    ///     args and recording how much state to allocate.
+    ///   - `does_body` becomes the runtime body of the created
+    ///     word, run with the state's address on the stack.
+    Template(TemplateDef),
+
+    /// Result of expanding a template invocation.  Emitted with
+    /// the same shape as Collection but the accessor body is the
+    /// captured does_body of the source template.
+    TemplateInstance(TemplateInstanceDef),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TemplateDef {
+    pub name: String,
+    pub name_span: Span,
+    pub effect: Option<StackEffect>,
+    /// Expressions BETWEEN `create` and `does>`, excluding both
+    /// markers.  Runs at template-instantiation time, consuming
+    /// the args the caller pushed before the template name.
+    /// First-cut grammar: a single multiplier word (`cells` or
+    /// `chars`) followed by `allot`, or just `allot`.
+    pub constructor: Vec<Expr>,
+    /// Expressions AFTER `does>`, excluding the marker.  Becomes
+    /// the runtime body of created instances.  The state's
+    /// address is on top of the stack at entry; the body
+    /// indexes / transforms / fetches as needed.
+    pub does_body: Vec<Expr>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TemplateInstanceDef {
+    /// The newly-defined word name (the token after the template
+    /// in source).
+    pub name: String,
+    pub name_span: Span,
+    /// Name of the source template, for diagnostics.
+    pub template_name: String,
+    /// Total bytes to allocate for this instance's state, computed
+    /// at expansion time from the args + constructor.
+    pub allocated_bytes: u32,
+    /// The does_body captured from the source template, expanded
+    /// into the accessor.
+    pub does_body: Vec<Expr>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

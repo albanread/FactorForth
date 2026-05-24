@@ -28,7 +28,7 @@ use std::fmt::Write;
 use super::ast::{
     CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
     ConstantDef, CreateDef, Definition, Expr, Item, Literal, LoopKind,
-    Program, VariableDef,
+    Program, TemplateInstanceDef, VariableDef,
 };
 use super::lex::StringKind;
 use super::resolve::Target;
@@ -128,6 +128,13 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
                 emit_collection(cl, &mut out); out.push('\n');
                 wrote_anything = true;
             }
+            Item::TemplateInstance(ti) => {
+                emit_template_instance(ti, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            // Item::Template itself emits NOTHING — it's a parse-
+            // time/sema-time construct.  Instances carry the body.
+            Item::Template(_) => {}
             _ => {}
         }
     }
@@ -233,6 +240,91 @@ fn emit_collection(cl: &CollectionDef, out: &mut String) {
         "SYMBOL: nf-coll-{n}\n{total_bytes} <buffer> nf-coll-{n} set-global\n: {n} ( idx -- addr ) nf-coll-{n} get-global swap {multiplier} * forth.runtime:nf-addr+ ; inline",
         n = n, total_bytes = total_bytes, multiplier = multiplier,
     ).unwrap();
+}
+
+/// Emit a CREATE/DOES> template instance (M2.9b).  Same overall
+/// shape as a Collection — SYMBOL holding a backing buffer, plus
+/// an accessor — but the accessor's body is the captured does_body
+/// from the source template, with two minimal translations:
+///
+///   - `+` becomes `forth.runtime:nf-addr+` (so user code like
+///     `does> swap cells +` indexes correctly into our opaque
+///     nf-addr instead of failing on `+`).
+///   - Everything else passes through verbatim via `emit_expr`,
+///     so cells/chars/@/!/etc. work normally.
+fn emit_template_instance(ti: &TemplateInstanceDef, out: &mut String) {
+    let n = &ti.name;
+    let bytes = ti.allocated_bytes.max(1);
+    write!(out,
+        "SYMBOL: nf-tmpl-{n}\n{bytes} <buffer> nf-tmpl-{n} set-global\n: {n} ( idx -- addr ) nf-tmpl-{n} get-global ",
+        n = n, bytes = bytes,
+    ).unwrap();
+    emit_does_body(&ti.does_body, out);
+    write!(out, " ; inline").unwrap();
+}
+
+/// Walk a captured does_body and emit each expression.  WordRefs
+/// to `+` get translated to `nf-addr+` (since after the SYMBOL
+/// push the data-stack top is an nf-addr, not a number).  We
+/// don't yet do this for `-` because address subtraction is rare
+/// in ANS code; will add when the first test forces it.
+fn emit_does_body(exprs: &[Expr], out: &mut String) {
+    let mut first = true;
+    for e in exprs {
+        if !first { out.push(' '); }
+        first = false;
+        match e {
+            Expr::WordRef { name, .. } if name == "+" => {
+                out.push_str("forth.runtime:nf-addr+");
+            }
+            Expr::Lit(Literal::Int { value, .. }) => {
+                write!(out, "{value}").unwrap();
+            }
+            Expr::Lit(Literal::Float { value, .. }) => {
+                if value.fract() == 0.0 && value.is_finite() {
+                    write!(out, "{value:.1}").unwrap();
+                } else {
+                    write!(out, "{value}").unwrap();
+                }
+            }
+            Expr::WordRef { name, .. } => {
+                // Other WordRefs: emit as-is.  Resolution against
+                // the builtin/user dictionary happened earlier;
+                // this is purely textual at this point.  For names
+                // that need vocab prefixing (`cells`, `@`, etc.)
+                // the user's source already had them resolved by
+                // the time we got here.  We emit the same `forth.
+                // runtime:` prefix that the rest of the emitter uses
+                // for known forth.runtime words.
+                emit_does_word(name, out);
+            }
+            // Literal strings and nested control flow inside a
+            // does_body are deferred — neither is needed for the
+            // common cell-array pattern.
+            _ => {
+                out.push_str("/* deferred-does-expr */");
+            }
+        }
+    }
+}
+
+/// Emit a word name inside a does_body.  For names that live in
+/// forth.runtime, prepend the vocab prefix so Factor's parser
+/// resolves cleanly even though we're inside an emit-time-
+/// constructed `:` body.
+fn emit_does_word(name: &str, out: &mut String) {
+    let lc = name.to_ascii_lowercase();
+    let needs_prefix = matches!(lc.as_str(),
+        "cells" | "chars" | "floats" | "cell+" | "char+"
+        | "@" | "!" | "c@" | "c!" | "+!" | "f@" | "f!"
+        | "nf-!" | "nf-c!" | "nf-+!" | "nf-f!"
+        | "type" | "cmove" | "fill" | "bl"
+    );
+    if needs_prefix {
+        write!(out, "forth.runtime:{lc}").unwrap();
+    } else {
+        out.push_str(name);
+    }
 }
 
 /// Emit a CREATE'd data buffer.  Same wide-path pattern as a

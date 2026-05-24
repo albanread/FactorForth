@@ -402,6 +402,27 @@ USING: io.encodings.utf8 byte-arrays sequences ;
 ! to clear buffers (`buf 80 BL FILL`).
 CONSTANT: bl 32
 
+! ALLOT: in traditional ANS this extends the data-space pointer;
+! we don't have a data-space pointer, so this is a no-op that
+! simply drops its argument.  Real allocation happens at template
+! instantiation time (see sema::expand_templates).  Programs that
+! call ALLOT outside a CREATE/DOES> template context get a quiet
+! drop rather than an error; that's a documented deviation from
+! ANS but matches our "no raw memory" stance.
+: allot ( n -- ) drop ; inline
+
+! FLOATS: cells/chars/floats are interchangeable address-arithmetic
+! multipliers in ANS.  We have cells (×8) and chars (×1) already;
+! floats is an alias for cells since our cells are 64-bit.
+: floats ( n -- bytes ) 8 * ; inline
+
+! HERE: in traditional ANS this returns the data-space pointer.
+! We don't have one; HERE returns 0 as a stub so programs that
+! reference it don't crash.  Real ANS code rarely uses HERE for
+! anything beyond "the address where the next ALLOT will land",
+! which doesn't translate to our model.
+: here ( -- addr ) 0 ; inline
+
 ! ── Pictured numeric output (the ANS `<# # #S sign hold #>` DSL) ──
 !
 ! In traditional ANS this DSL uses PAD as the accumulator and

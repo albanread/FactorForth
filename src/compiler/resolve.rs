@@ -200,6 +200,15 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("char+",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "char+" }),
         ("cells",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cells" }),
         ("chars",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "chars" }),
+        ("floats", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "floats" }),
+
+        // ALLOT and HERE — primarily appear inside template
+        // constructors where they're parser-level markers; the
+        // forth.runtime versions are no-ops/stubs so non-template
+        // uses don't crash.  Real allocation happens via
+        // CollectionDef / TemplateInstance at sema time.
+        ("allot",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "allot" }),
+        ("here",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "here" }),
 
         // Float memory ops — used by `farray` instances.
         ("f@", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f@" }),
@@ -247,11 +256,13 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
     };
     for item in &prog.items {
         match item {
-            Item::Definition(d)  => register(&d.name, d.name_span, &mut user_words)?,
-            Item::Variable(v)    => register(&v.name, v.name_span, &mut user_words)?,
-            Item::Constant(c)    => register(&c.name, c.name_span, &mut user_words)?,
-            Item::Create(cd)     => register(&cd.name, cd.name_span, &mut user_words)?,
-            Item::Collection(cl) => register(&cl.name, cl.name_span, &mut user_words)?,
+            Item::Definition(d)        => register(&d.name, d.name_span, &mut user_words)?,
+            Item::Variable(v)          => register(&v.name, v.name_span, &mut user_words)?,
+            Item::Constant(c)          => register(&c.name, c.name_span, &mut user_words)?,
+            Item::Create(cd)           => register(&cd.name, cd.name_span, &mut user_words)?,
+            Item::Collection(cl)       => register(&cl.name, cl.name_span, &mut user_words)?,
+            Item::Template(t)          => register(&t.name, t.name_span, &mut user_words)?,
+            Item::TemplateInstance(ti) => register(&ti.name, ti.name_span, &mut user_words)?,
             Item::TopLevel { .. } => {}
         }
     }
@@ -266,7 +277,18 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
             // expressions to resolve — their bodies are AST-level
             // data (name + value or buffer size), not user-visible
             // word references.
-            Item::Variable(_) | Item::Constant(_) | Item::Create(_) | Item::Collection(_) => {}
+            Item::Variable(_) | Item::Constant(_)
+            | Item::Create(_) | Item::Collection(_) => {}
+            // Templates have a constructor and does_body, both of
+            // which may reference builtins.  Walk them so resolve
+            // catches typos.
+            Item::Template(t) => {
+                resolve_exprs(&t.constructor, &builtins, &user_words, &mut word_targets)?;
+                resolve_exprs(&t.does_body,   &builtins, &user_words, &mut word_targets)?;
+            }
+            // Template instances inherit the resolved does_body
+            // from their source template; no separate resolution.
+            Item::TemplateInstance(_) => {}
         }
     }
 

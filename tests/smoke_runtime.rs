@@ -680,6 +680,44 @@ fn phase27_correct_programs_still_compile() {
     }
 }
 
+// ─── Phase 2.9b — CREATE/DOES> as templates ──────────────────────────────────
+
+/// User defines their own indexed-array template, instantiates it,
+/// stores and fetches.  This is the M2.9b headline: programs that
+/// reach for CREATE/DOES> for novel data shapes now work.
+#[test]
+#[ignore]
+fn phase29b_user_array_template() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": myarray create cells allot does> swap cells + ;  \
+                 4 myarray ages  \
+                 42 2 ages !  \
+                 2 ages @ .");
+            assert!(out.contains("42"), "expected 42, got {out:?}");
+        });
+    }
+}
+
+/// Two instances of the same template have independent state.
+/// `ages[0]` and `prices[0]` shouldn't alias.
+#[test]
+#[ignore]
+fn phase29b_template_instances_independent() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": myarray create cells allot does> swap cells + ;  \
+                 4 myarray ages  4 myarray prices  \
+                 100 0 ages !  200 0 prices !  \
+                 0 ages @ .  0 prices @ .");
+            assert!(out.contains("100") && out.contains("200"),
+                    "expected 100 and 200, got {out:?}");
+        });
+    }
+}
+
 // ─── Phase 2.10 — ANS strings that don't crash ──────────────────────────────
 
 /// `S"` correctly returns (c-addr, u) and `TYPE` consumes both.
