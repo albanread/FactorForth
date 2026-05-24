@@ -1,0 +1,59 @@
+[package]
+name = "newfactor"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust ANS Forth compiler targeting Factor's VM."
+license = "BSD-3-Clause"
+readme = "README.md"
+
+[lib]
+name = "newfactor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "newfactor"
+path = "src/main.rs"
+
+[[bin]]
+name = "newfactor-ui"
+path = "src/bin/newfactor_ui.rs"
+
+# Dependencies ──────────────────────────────────────────────────────────────
+#
+# wf64: path dependency on the WF64 project for iGui (Direct2D/DirectWrite MDI
+#       front-end).  WF64 is consumed read-only — we do not modify it.  Once
+#       a real iGui crate is extracted upstream, this dep can be repointed.
+#
+# windows: Win32 API bindings, needed for LoadLibrary'ing factor.dll and for
+#          the FFI seam.  Feature flags mirror what factor.dll's embedding
+#          requires; we do not pull in UI subsystems here (those come via wf64).
+#
+# anyhow: error type for internal plumbing; user-facing errors go through
+#         src/error.rs with ANS-style formatting.
+#
+# libloading: dynamic loading of factor.dll at runtime, avoiding link-time
+#             dependency on the import library.
+
+[dependencies]
+wf64       = { path = "../WF64" }
+anyhow     = "1"
+libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+]
+
+# ───────────────────────────────────────────────────────────────────────────
+
+[profile.dev]
+debug = 1
+
+[profile.release]
+lto = "thin"
+opt-level = 3
+debug = 1   # keep symbols for benchmarking / disassembly inspection

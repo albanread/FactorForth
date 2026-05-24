@@ -1,0 +1,40 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock      # binary, not library — exclude per workspace convention
+
+# Build artifacts
+vm-build/vm/*.obj
+vm-build/factor.dll
+vm-build/factor.dll.lib
+vm-build/factor.dll.exp
+vm-build/*.exe
+
+# Image artifacts (large, regenerable via scripts/build-image.sh)
+*.image
+images/*.image
+
+# Stock Factor install leftovers in the project root (will be cleaned out separately)
+factor.dll
+factor.image
+libcrypto-*.dll
+libssl-*.dll
+sqlite3.dll
+
+# Logs and scratch
+*.log
+*.stdout
+*.stderr
+test_*.txt
+nf_diag*.txt
+nf_test_*.txt
+slim-bootstrap.*
+
+# OS-level
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
