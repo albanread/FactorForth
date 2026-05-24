@@ -39,3 +39,9 @@ in six months).
   WHILE-hangs-on-`[ dup ]` bug, watchdogs everywhere, and why
   emitting `[ pred zero? if-branch ] loop` beats Factor's
   built-in `while` for ANS predicates.
+- `2026-05-24-m2.5-do-loop.md` — M2.5 DO/LOOP.  Three surprises:
+  save-image-and-exit zeros our special-object slots (lazy
+  init in accessors), `inline` is mandatory for words taking
+  quotation arguments, and three LEAVE designs — only the
+  flag-based one preserves the accumulator that ANS code keeps
+  on the data stack across iterations.

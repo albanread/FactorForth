@@ -464,6 +464,97 @@ fn phase24_begin_until_terminates() {
     }
 }
 
+// ─── Phase 2.5 — DO/LOOP ────────────────────────────────────────────────────
+
+/// The M2.5 plan success criterion verbatim:
+///   `: sum ( n -- s ) 0 swap 0 ?do i + loop ; 10 sum .` → 45
+///
+/// Exercises ?DO, LOOP (step +1), and I.
+#[test]
+#[ignore]
+fn phase25_sum_via_qdo_loop() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": sum ( n -- s ) 0 swap 0 ?do i + loop ; 10 sum .");
+            assert!(out.contains("45"), "expected 45, got {out:?}");
+        });
+    }
+}
+
+/// `?DO` skips when limit == start.  `: nope 5 5 ?do i . loop ; nope`
+/// should produce no numbers, just the empty output.
+#[test]
+#[ignore]
+fn phase25_qdo_skips_empty_range() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": run-it ( -- ) 5 5 ?do 99 . loop ; \
+                 .\" before \" run-it .\" after\"");
+            // "99" must NOT appear; bracketing text must.
+            assert!(out.contains("before") && out.contains("after"),
+                    "expected before/after, got {out:?}");
+            assert!(!out.contains("99"),
+                    "loop body should not have run, got {out:?}");
+        });
+    }
+}
+
+/// `+LOOP` with a user-supplied step.  Count 0, 2, 4, 6, 8 — five
+/// iterations, sum = 20.
+#[test]
+#[ignore]
+fn phase25_plus_loop_step() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": even-sum ( -- s ) 0 10 0 ?do i + 2 +loop ; even-sum .");
+            assert!(out.contains("20"), "expected 0+2+4+6+8 = 20, got {out:?}");
+        });
+    }
+}
+
+/// Nested DO/LOOP: `I` and `J`.  Produce sum of i*j for 0≤i<3, 0≤j<3.
+///   sum = 0*0 + 0*1 + 0*2 + 1*0 + 1*1 + 1*2 + 2*0 + 2*1 + 2*2
+///       = 0 + 0 + 0 + 0 + 1 + 2 + 0 + 2 + 4 = 9
+/// Here `J` is the outer loop index, `I` the inner.
+#[test]
+#[ignore]
+fn phase25_nested_i_and_j() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": cross ( -- s ) 0 3 0 ?do 3 0 ?do j i * + loop loop ; cross .");
+            assert!(out.contains('9'), "expected 9, got {out:?}");
+        });
+    }
+}
+
+/// `LEAVE` flags the loop for exit at iteration boundary.  The
+/// flag-based implementation requires LEAVE at the end of the
+/// iteration body (the common ANS idiom) — code AFTER `leave` in
+/// the same iteration still runs.  See the comment on `leave` in
+/// `forth.runtime` for the rationale.
+///
+/// Sum 0..N where N is bounded by i>=4 firing LEAVE.  Body order:
+/// add i, then check and leave.  So iterations i=0..4 each add,
+/// and i=4 fires leave at end.  Sum: 0+1+2+3+4 = 10.
+#[test]
+#[ignore]
+fn phase25_leave_exits_loop() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": partial ( -- s ) 0 10 0 ?do \
+                   i + \
+                   i 4 >= if leave then \
+                 loop ; partial .");
+            assert!(out.contains("10"), "expected 0+1+2+3+4 = 10, got {out:?}");
+        });
+    }
+}
+
 /// Nested IF — verify the parser folds the inner IF into the outer
 /// ELSE branch correctly when emitted.  `: max ( a b -- m ) 2dup <
 /// if swap then drop ;` would test 2dup which we don't have yet,

@@ -25,7 +25,7 @@
 
 use std::fmt::Write;
 
-use super::ast::{Definition, Expr, Item, Literal, Program};
+use super::ast::{Definition, Expr, Item, Literal, LoopKind, Program};
 use super::lex::StringKind;
 use super::resolve::{vocabs_needed, Resolved, Target};
 
@@ -220,6 +220,36 @@ fn emit_expr(e: &Expr, r: &Resolved, out: &mut String) {
             out.push_str("[ ");
             emit_exprs(body, r, out);
             out.push_str(" t ] kernel:loop");
+        }
+
+        // ── DO/LOOP, ?DO/LOOP, DO/+LOOP, ?DO/+LOOP ─────────────────
+        //
+        // The runtime entry points (forth.runtime:do-loop /
+        // ?do-loop) take ( limit start quot -- ).  The body
+        // quotation MUST leave a step amount on the stack as its
+        // last action — bump-loop consumes it.
+        //
+        //   LOOP   →  body emits ` 1` at end (compiler-injected)
+        //   +LOOP  →  body's final user expression already leaves
+        //             the step on top; we emit nothing extra
+        //
+        // limit and start are already on the data stack from
+        // expressions preceding the DO marker — they aren't part of
+        // the DoLoop AST node.
+        Expr::DoLoop { is_qdo, body, loop_kind, .. } => {
+            out.push_str("[ ");
+            emit_exprs(body, r, out);
+            if matches!(loop_kind, LoopKind::Plus1) {
+                // Step +1 for plain LOOP.
+                out.push_str(" 1");
+            }
+            // PlusN: body's tail already produces the step.
+            out.push_str(" ] ");
+            if *is_qdo {
+                out.push_str("forth.runtime:?do-loop");
+            } else {
+                out.push_str("forth.runtime:do-loop");
+            }
         }
     }
 }

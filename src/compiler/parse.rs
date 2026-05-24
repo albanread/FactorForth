@@ -13,7 +13,7 @@
 
 use super::ast::*;
 use super::error::{CompileError, Pos, Span};
-use super::lex::{Tok, Token, StringKind};
+use super::lex::{StringKind, Tok, Token};
 
 /// Parse a full token stream into a `Program`.
 pub fn parse(toks: &[Token]) -> Result<Program, ParseError> {
@@ -270,9 +270,12 @@ impl<'t> Parser<'t> {
                 match lc.as_str() {
                     "if"    => { self.bump(); self.parse_if(t_span) }
                     "begin" => { self.bump(); self.parse_begin(t_span) }
+                    "do"    => { self.bump(); self.parse_do(t_span, false) }
+                    "?do"   => { self.bump(); self.parse_do(t_span, true)  }
                     // Terminators leaking through to here means they
                     // weren't inside a matching opener.
-                    "else" | "then" | "until" | "while" | "repeat" | "again" => {
+                    "else" | "then" | "until" | "while" | "repeat"
+                    | "again" | "loop" | "+loop" => {
                         Err(ParseError::StrayControlWord {
                             word: lc, at: t_span,
                         })
@@ -338,6 +341,28 @@ impl<'t> Parser<'t> {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Parse `DO ... LOOP` or `DO ... +LOOP` (also `?DO` variant).
+    /// Caller has consumed the `do`/`?do` token at `do_span`.
+    fn parse_do(&mut self, do_span: Span, is_qdo: bool) -> Result<Expr, ParseError> {
+        let opener = if is_qdo { "?do" } else { "do" };
+        let (body, term) = self.parse_block_until(
+            opener, do_span, &["loop", "+loop"],
+        )?;
+        let term_word = match &term.kind {
+            Tok::Word(w) => w.to_ascii_lowercase(),
+            _ => unreachable!(),
+        };
+        let loop_kind = match term_word.as_str() {
+            "loop"  => LoopKind::Plus1,
+            "+loop" => LoopKind::PlusN,
+            _ => unreachable!(),
+        };
+        Ok(Expr::DoLoop {
+            is_qdo, body, loop_kind,
+            span: Span { start: do_span.start, end: term.span.end },
+        })
     }
 
     /// Parse a sequence of expressions until we encounter one of
@@ -615,5 +640,60 @@ mod tests {
     fn unterminated_begin_rejected() {
         let err = parse_str(": foo begin 1 ;").unwrap_err();
         assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "begin"));
+    }
+
+    // ── DO/LOOP parsing (M2.5) ─────────────────────────────────────
+
+    #[test]
+    fn do_loop_basic() {
+        let prog = parse_str(": sum 0 swap 0 do i + loop ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::DoLoop { is_qdo, body, loop_kind, .. } = d.body.last().unwrap() else {
+            panic!("expected DoLoop");
+        };
+        assert!(!*is_qdo);
+        assert_eq!(*loop_kind, LoopKind::Plus1);
+        assert_eq!(body.len(), 2);          // i +
+    }
+
+    #[test]
+    fn qdo_loop() {
+        let prog = parse_str(": sum 0 swap 0 ?do i + loop ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::DoLoop { is_qdo, loop_kind, .. } = d.body.last().unwrap() else { panic!() };
+        assert!(*is_qdo);
+        assert_eq!(*loop_kind, LoopKind::Plus1);
+    }
+
+    #[test]
+    fn plus_loop_terminator() {
+        let prog = parse_str(": odd 10 0 ?do i . 2 +loop ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::DoLoop { loop_kind, body, .. } = d.body.last().unwrap() else { panic!() };
+        assert_eq!(*loop_kind, LoopKind::PlusN);
+        // body: i . 2  — the 2 is the step expression
+        assert_eq!(body.len(), 3);
+    }
+
+    #[test]
+    fn nested_do_loops() {
+        let prog = parse_str(": matrix 3 0 do 3 0 do i j * . loop loop ;").unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::DoLoop { body: outer, .. } = d.body.last().unwrap() else { panic!() };
+        // Outer body: 3, 0, DoLoop(inner)
+        assert!(outer.iter().any(|e| matches!(e, Expr::DoLoop { .. })),
+                "expected inner DoLoop inside outer");
+    }
+
+    #[test]
+    fn stray_loop_rejected() {
+        let err = parse_str(": foo loop ;").unwrap_err();
+        assert!(matches!(err, ParseError::StrayControlWord { ref word, .. } if word == "loop"));
+    }
+
+    #[test]
+    fn unterminated_do_rejected() {
+        let err = parse_str(": foo 10 0 do i + ;").unwrap_err();
+        assert!(matches!(err, ParseError::UnterminatedControl { ref opener, .. } if opener == "do"));
     }
 }

@@ -113,6 +113,35 @@ pub enum Expr {
     /// later milestones — for now this emits as Factor's
     /// `[ body t ] loop` which is genuinely infinite).
     BeginAgain { body: Vec<Expr>, span: Span },
+
+    /// `LIMIT START DO body LOOP`  (or `?DO`, or `+LOOP`).
+    ///
+    /// At runtime, the two operands beneath the DO marker are taken
+    /// as `( limit start -- )`.  The body runs with the loop index
+    /// accessible as `I` (innermost) or `J` (next-outer).
+    ///
+    /// `is_qdo` distinguishes `?DO` (skip if limit == start) from
+    /// `DO` (always run at least once).
+    ///
+    /// `loop_kind`:
+    ///   - `Plus1`: terminator is `LOOP`; step is +1 each iteration,
+    ///     injected at emit time.
+    ///   - `PlusN`: terminator is `+LOOP`; the body itself produces
+    ///     the step on top of the stack at end-of-body.
+    DoLoop {
+        is_qdo: bool,
+        body: Vec<Expr>,
+        loop_kind: LoopKind,
+        span: Span,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopKind {
+    /// Terminator `LOOP`: step is implicitly +1.
+    Plus1,
+    /// Terminator `+LOOP`: body leaves step on the stack.
+    PlusN,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +162,7 @@ impl Expr {
             Expr::BeginUntil       { span, .. } => *span,
             Expr::BeginWhileRepeat { span, .. } => *span,
             Expr::BeginAgain       { span, .. } => *span,
+            Expr::DoLoop           { span, .. } => *span,
         }
     }
 }

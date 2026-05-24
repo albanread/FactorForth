@@ -149,11 +149,13 @@ TUPLE: fstack { storage array read-only } top ;
 ! Slot 82 was chosen as the first unused special-object index
 ! (special_object_count = 85; highest named = 81).  No Factor source
 ! references 82 special-object, so this is collision-free.
-: get-frs ( -- fstack )   82 special-object ; inline
+! Lazy init.  save-image-and-exit zeros special-object slots
+! outside the OBJ_STARTUP_QUOT..OBJ_BIGNUM_NEG_ONE range (=81), so
+! 82 comes back as `f` after image reload.  Same story for slot 83
+! below.
+: get-frs ( -- fstack )
+    82 special-object [ 256 <fstack> dup 82 set-special-object ] unless* ; inline
 : set-frs ( fs -- )       82 set-special-object ; inline
-
-! Initialise at vocab-load time, idempotent on re-load.
-82 special-object [ 256 <fstack> 82 set-special-object ] unless
 
 :: fstack-push ( x fs -- )
     fs top>> :> n
@@ -190,16 +192,29 @@ TUPLE: fstack { storage array read-only } top ;
 ! Uses special-object slot 83 for the loop-frame stack.  Same idiom
 ! as the return stack above; same performance profile.
 
-TUPLE: loop-frame { limit integer } { index integer } ;
+! `left?` is set by LEAVE; bump-loop checks it and returns done?=t,
+! exiting the loop cleanly at the next iteration boundary.
+TUPLE: loop-frame
+    { limit integer }
+    { index integer }
+    { left? boolean } ;
 
-: get-loop-frames ( -- fs )   83 special-object ; inline
+! Lazy initialisation:
+!   `save-image-and-exit` zeros every special-object slot outside a
+!   hardcoded range that maxes out at OBJ_BIGNUM_NEG_ONE (=81), so
+!   our slots 82 and 83 come back as `f` after image reload.  The
+!   parse-time init we used to do at the bottom of the file only
+!   fires during build-image, not after the saved image loads.
+!   Solution: lazy init inside the getter via `unless*` — if the
+!   slot is f, allocate a fresh fstack, install it, and return it.
+: get-loop-frames ( -- fs )
+    83 special-object [ 32 <fstack> dup 83 set-special-object ] unless* ; inline
 : set-loop-frames ( fs -- )   83 set-special-object ; inline
 
-83 special-object [ 32 <fstack> 83 set-special-object ] unless
-
-! Internal: push/pop a loop frame.
+! Internal: push/pop a loop frame.  `f` is the initial value of the
+! `left?` field — no LEAVE has fired yet.
 : push-loop-frame ( limit start -- )
-    loop-frame boa get-loop-frames fstack-push ; inline
+    f loop-frame boa get-loop-frames fstack-push ; inline
 
 : pop-loop-frame ( -- )
     get-loop-frames fstack-drop ; inline
@@ -211,36 +226,73 @@ TUPLE: loop-frame { limit integer } { index integer } ;
 : j ( -- n )
     get-loop-frames [ top>> 2 - ] [ storage>> ] bi nth-unsafe index>> ; inline
 
-! Bumping the innermost index by +1 (LOOP) or +n (+LOOP).
+! Bumping the innermost index by +1 (LOOP) or +n (+LOOP).  Checks
+! the `left?` flag first — if LEAVE has fired, report done? = true
+! immediately without bumping further.
 :: bump-loop ( delta -- done? )
     get-loop-frames fstack-peek :> frame
-    frame index>> delta +  :> new-index
-    new-index frame index<<
-    new-index frame limit>> >= ;
+    frame left?>>
+    [ t ]
+    [
+        frame index>> delta +  :> new-index
+        new-index frame index<<
+        new-index frame limit>> >=
+    ] if ;
 
-! The compiler will emit:
-!     ( limit start ) push-loop-frame
-!     [ <body that may use I> ] do-loop-body
-! where do-loop-body increments and tests.  An exception-based LEAVE
-! unwinds the loop-frame stack via with-loop-leave.
-
-SYMBOL: loop-leave-tag
-
-: with-loop-leave ( quot -- )
-    loop-leave-tag swap [ pop-loop-frame ] [ ] cleanup ; inline
-
+! LEAVE — mark the innermost loop frame as "ready to exit".
+!
+! Earlier drafts used throw+recover or with-return+return for a
+! non-local exit.  Both of those mechanisms restore the data stack
+! to a SAVED state on return — which discards the accumulator the
+! body has been building up across iterations.  ANS-faithful LEAVE
+! must preserve the data stack.
+!
+! Flag-based LEAVE is the clean alternative: set `left?` on the
+! frame, body completes its current iteration to a natural end,
+! bump-loop sees the flag and exits the loop.  Trade-off: any
+! body code AFTER `LEAVE` in the same iteration still runs.  The
+! common ANS idiom places LEAVE at the end of an IF at the end of
+! the loop body, where this distinction doesn't matter:
+!
+!     do  body  some-cond if leave then  loop
+!
+! Mid-body LEAVE in the form `do  some-cond if leave then  body  loop`
+! will execute `body` once more for the leave-firing iteration.
+! Document this in the user guide if it becomes a real issue.
 : leave ( -- )
-    loop-leave-tag get throw ;
+    get-loop-frames fstack-peek t >>left? drop ;
 
 ! do-loop:  ( limit start quot -- )
-! Runs quot repeatedly with i providing the current index, until
-! index reaches limit.  LEAVE exits early via throw/catch.
-:: do-loop ( limit start quot -- )
+! Runs quot repeatedly with i providing the current index.  Each
+! call of `quot` MUST leave the step amount on the stack as its
+! final action — the compiler injects `1` for plain LOOP and the
+! user's step expression for +LOOP.  bump-loop consumes the step,
+! bumps the index, returns done?.  We continue while NOT done.
+! LEAVE escapes early via with-return.
+!
+! `inline` is required for two reasons:
+!   1. Factor's compiler refuses `quot call` if the surrounding word
+!      isn't inline — the quotation argument can't escape into a
+!      non-inline frame because the compiler needs to know the
+!      quotation's identity at compile time to inline-expand it.
+!   2. Callers of do-loop want effect inference to see through it.
+!      With `inline` the call-site sees the full body and can
+!      derive the effect from the literal quotation passed in.
+!
+! LEAVE just sets a flag now, so the loop always exits via the
+! normal "bump-loop returned done?" path.  pop-loop-frame runs
+! after the loop on every exit.
+::  do-loop  ( limit start quot -- )
     limit start push-loop-frame
-    [
-        [ quot call 1 bump-loop ] loop
-    ] [ loop-leave-tag = [ pop-loop-frame ] [ rethrow ] if ] recover
-    pop-loop-frame ;
+    [ quot call bump-loop not ] kernel:loop
+    pop-loop-frame ; inline
+
+! ?do-loop:  ( limit start quot -- )
+! ANS ?DO: skip the loop entirely if limit equals start.  Standard
+! DO would run once even when bounds equal (an ANS-94 footgun
+! `?DO` exists to dodge); we mirror that.
+::  ?do-loop  ( limit start quot -- )
+    limit start = [ ] [ limit start quot do-loop ] if ; inline
 
 ! ── 4. ANS-STYLE I/O ─────────────────────────────────────────────────────
 !

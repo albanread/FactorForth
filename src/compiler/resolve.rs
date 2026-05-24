@@ -139,6 +139,14 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("xor", Builtin { vocab: "math.bitwise", factor_name: "bitxor" }),
         ("invert", Builtin { vocab: "math.bitwise", factor_name: "bitnot" }),
 
+        // DO/LOOP support — I, J, LEAVE, UNLOOP.  The loop driver
+        // itself (`do-loop` / `?do-loop`) is invoked from emit, not
+        // through a name lookup; the user never writes its name.
+        ("i",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "i" }),
+        ("j",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "j" }),
+        ("leave",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "leave" }),
+        ("unloop", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "pop-loop-frame" }),
+
         // I/O — `.` collides with prettyprint, so always FQ
         (".",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "." }),
         ("cr", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cr" }),
@@ -241,6 +249,9 @@ fn resolve_exprs(
             }
             Expr::BeginWhileRepeat { pred, body, .. } => {
                 resolve_exprs(pred, builtins, user_words, out)?;
+                resolve_exprs(body, builtins, user_words, out)?;
+            }
+            Expr::DoLoop { body, .. } => {
                 resolve_exprs(body, builtins, user_words, out)?;
             }
         }
