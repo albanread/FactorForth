@@ -18,6 +18,10 @@ path = "src/main.rs"
 name = "newfactor-ui"
 path = "src/bin/newfactor_ui.rs"
 
+[[bin]]
+name = "embed-smoke"
+path = "src/bin/embed_smoke.rs"
+
 # Dependencies ──────────────────────────────────────────────────────────────
 #
 # wf64: path dependency on the WF64 project for iGui (Direct2D/DirectWrite MDI

@@ -84,17 +84,21 @@ TUPLE: nf-addr
 !
 ! ANS `@` and `c@` parse fine in Factor, so they keep their names.
 
+! NB: alien-unsigned-cell takes ( c-ptr n -- value ) and
+! set-alien-unsigned-cell takes ( value c-ptr n -- ).  The bi order
+! below produces ( ba off ) on top, matching both signatures.
+
 : @ ( addr -- n )
-    [ off>> ] [ ba>> ] bi alien-unsigned-cell ; inline
+    [ ba>> ] [ off>> ] bi alien-unsigned-cell ; inline
 
 : nf-! ( n addr -- )
-    [ off>> ] [ ba>> ] bi set-alien-unsigned-cell ; inline
+    [ ba>> ] [ off>> ] bi set-alien-unsigned-cell ; inline
 
 : c@ ( addr -- ch )
-    [ off>> ] [ ba>> ] bi alien-unsigned-1 ; inline
+    [ ba>> ] [ off>> ] bi alien-unsigned-1 ; inline
 
 : nf-c! ( ch addr -- )
-    [ off>> ] [ ba>> ] bi set-alien-unsigned-1 ; inline
+    [ ba>> ] [ off>> ] bi set-alien-unsigned-1 ; inline
 
 : nf-+! ( n addr -- )
     [ @ + ] [ nf-! ] bi ; inline
