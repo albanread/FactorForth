@@ -30,6 +30,14 @@ pub fn parse(toks: &[Token]) -> Result<Program, ParseError> {
 pub enum ParseError {
     /// `:` not followed by an identifier name.
     ExpectedDefName { at: Span },
+    /// `VARIABLE` / `CONSTANT` / `FCONSTANT` not followed by a name.
+    ExpectedDefiningName { keyword: &'static str, at: Span },
+    /// `CONSTANT` / `FCONSTANT` with no preceding value expression.
+    ConstantWithoutValue { keyword: &'static str, at: Span },
+    /// CONSTANT's preceding expression is not a simple literal.
+    /// Computed CONSTANT/FCONSTANT values (multi-token expressions)
+    /// are a later milestone — see PLAN.md.
+    NonLiteralConstantValue { keyword: &'static str, at: Span },
     /// Found `:` while already inside a `:` definition (ANS forbids
     /// nested colons).
     NestedColon { outer: Span, inner: Span },
@@ -62,6 +70,12 @@ impl std::fmt::Display for ParseError {
         match self {
             ParseError::ExpectedDefName { at } =>
                 write!(f, "expected definition name after `:` at {at}"),
+            ParseError::ExpectedDefiningName { keyword, at } =>
+                write!(f, "expected name after `{keyword}` at {at}"),
+            ParseError::ConstantWithoutValue { keyword, at } =>
+                write!(f, "`{keyword}` at {at} needs a value before it (e.g. `64 CONSTANT max`)"),
+            ParseError::NonLiteralConstantValue { keyword, at } =>
+                write!(f, "`{keyword}` at {at}: only literal values are supported in this milestone"),
             ParseError::NestedColon { inner, .. } =>
                 write!(f, "nested `:` at {inner}: ANS forbids defining a word inside another"),
             ParseError::StraySemicolon { at } =>
@@ -134,46 +148,109 @@ impl<'t> Parser<'t> {
 
     fn program(&mut self) -> Result<Program, ParseError> {
         let mut items: Vec<Item> = Vec::new();
+        // `pending` accumulates top-level expressions until either
+        // EOF, a `:`/defining word boundary, or end-of-input.  The
+        // defining words `CONSTANT`/`FCONSTANT` consume the most
+        // recent pending expression as their value.
+        let mut pending: Vec<Expr> = Vec::new();
+        let mut pending_start: Option<Span> = None;
+
+        let flush_pending = |items: &mut Vec<Item>,
+                             pending: &mut Vec<Expr>,
+                             pending_start: &mut Option<Span>| {
+            if pending.is_empty() { return; }
+            let start = pending_start.unwrap();
+            let end = pending.last().unwrap().span();
+            items.push(Item::TopLevel {
+                exprs: std::mem::take(pending),
+                span: Span { start: start.start, end: end.end },
+            });
+            *pending_start = None;
+        };
+
         loop {
             self.skip_comments();
             let Some(t) = self.peek() else { break; };
-            match &t.kind {
-                Tok::Word(w) if w == ":" => {
+            // Defining-word recognition.  Match case-insensitively.
+            let opener = match &t.kind {
+                Tok::Word(w) => Some(w.to_ascii_lowercase()),
+                _ => None,
+            };
+            match opener.as_deref() {
+                Some(":") => {
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
                     let def = self.colon_definition()?;
                     items.push(Item::Definition(def));
                 }
-                Tok::Word(w) if w == ";" => {
+                Some(";") => {
                     return Err(ParseError::StraySemicolon { at: t.span });
                 }
+                Some("variable") => {
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump(); // consume `variable`
+                    let name_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: "VARIABLE", at: kw_span },
+                    )?;
+                    let (name, name_span) = match &name_tok.kind {
+                        Tok::Word(w) => (w.clone(), name_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "VARIABLE", at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    items.push(Item::Variable(VariableDef {
+                        name, name_span,
+                        span: Span { start: kw_span.start, end: name_span.end },
+                    }));
+                }
+                Some(kw @ ("constant" | "fconstant")) => {
+                    let kw_static: &'static str = if kw == "constant" { "CONSTANT" } else { "FCONSTANT" };
+                    let kw_span = t.span;
+                    // The most recent pending expression IS the value.
+                    let value_expr = pending.pop()
+                        .ok_or(ParseError::ConstantWithoutValue { keyword: kw_static, at: kw_span })?;
+                    let value = match &value_expr {
+                        Expr::Lit(Literal::Int   { value, .. }) => ConstValue::Int(*value),
+                        Expr::Lit(Literal::Float { value, .. }) => ConstValue::Float(*value),
+                        _ => return Err(ParseError::NonLiteralConstantValue {
+                            keyword: kw_static, at: value_expr.span(),
+                        }),
+                    };
+                    // Now flush any *other* pending expressions as a
+                    // separate TopLevel.  They preceded the constant
+                    // value and were unrelated.
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    self.bump(); // consume `constant` / `fconstant`
+                    let name_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: kw_static, at: kw_span },
+                    )?;
+                    let (name, name_span) = match &name_tok.kind {
+                        Tok::Word(w) => (w.clone(), name_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: kw_static, at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    let flavour = if kw == "fconstant" {
+                        ConstFlavour::Float
+                    } else { ConstFlavour::Cell };
+                    items.push(Item::Constant(ConstantDef {
+                        name, name_span, value, flavour,
+                        span: Span { start: value_expr.span().start, end: name_span.end },
+                    }));
+                }
                 _ => {
-                    // Collect a run of top-level expressions until we
-                    // hit `:` or EOF.
-                    let start_span = t.span;
-                    let mut exprs: Vec<Expr> = Vec::new();
-                    let mut end_span = start_span;
-                    loop {
-                        self.skip_comments();
-                        let Some(t) = self.peek() else { break; };
-                        match &t.kind {
-                            Tok::Word(w) if w == ":" => break,
-                            Tok::Word(w) if w == ";" =>
-                                return Err(ParseError::StraySemicolon { at: t.span }),
-                            _ => {
-                                let e = self.expr_one()?;
-                                end_span = e.span();
-                                exprs.push(e);
-                            }
-                        }
+                    // Regular expression: accumulate into pending.
+                    if pending_start.is_none() {
+                        pending_start = Some(t.span);
                     }
-                    if !exprs.is_empty() {
-                        items.push(Item::TopLevel {
-                            exprs,
-                            span: Span { start: start_span.start, end: end_span.end },
-                        });
-                    }
+                    let e = self.expr_one()?;
+                    pending.push(e);
                 }
             }
         }
+        flush_pending(&mut items, &mut pending, &mut pending_start);
         Ok(Program { items })
     }
 

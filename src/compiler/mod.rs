@@ -27,7 +27,10 @@ pub mod parse;
 pub mod resolve;
 pub mod sema;
 
-pub use ast::{CaseArm, Definition, Expr, Item, Literal, LoopKind, Program, StackEffect};
+pub use ast::{
+    CaseArm, ConstFlavour, ConstValue, ConstantDef, Definition, Expr, Item,
+    Literal, LoopKind, Program, StackEffect, VariableDef,
+};
 pub use effect::{infer, Effect, EffectError, Inferred};
 pub use emit::{emit, EmitOpts};
 pub use error::{CompileError, Pos, Span};

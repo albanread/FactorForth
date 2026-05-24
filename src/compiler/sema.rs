@@ -41,7 +41,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::ast::{Definition, Expr, Item, Program};
+use super::ast::{ConstantDef, Expr, Item, Program, VariableDef};
 use super::effect::{infer, Effect, EffectError};
 use super::error::Span;
 use super::resolve::{resolve, ResolveError, Target};
@@ -102,6 +102,14 @@ pub struct Sema {
     pub word_targets: HashMap<Span, Target>,
     pub user_words:   HashMap<String, UserWord>,
 
+    // ── M2.8 dictionary entries (variables and constants) ────────
+    /// Variable name (lowercased) → its declaration.  Kept separate
+    /// from `user_words` so escape analysis and emit can iterate
+    /// over them without filtering.
+    pub variables: BTreeMap<String, VariableDef>,
+    /// Constant name (lowercased) → declaration (carries value).
+    pub constants: BTreeMap<String, ConstantDef>,
+
     // ── From effect ──────────────────────────────────────────────
     pub user_effects:  HashMap<String, Effect>,
     pub effect_errors: Vec<EffectError>,
@@ -114,7 +122,7 @@ pub struct Sema {
     /// referenced name → spans of every reference in the program.
     pub use_sites: BTreeMap<String, Vec<Span>>,
 
-    // ── From sema::escape (M2.8+) ────────────────────────────────
+    // ── From sema::escape (M2.8) ─────────────────────────────────
     pub escape: HashMap<String, EscapeState>,
 }
 
@@ -150,10 +158,27 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
         }
     }
 
+    // Collect variables and constants into their own tables.
+    let mut variables: BTreeMap<String, VariableDef> = BTreeMap::new();
+    let mut constants: BTreeMap<String, ConstantDef> = BTreeMap::new();
+    for item in &resolved.program.items {
+        match item {
+            Item::Variable(v) => {
+                variables.insert(v.name.to_ascii_lowercase(), v.clone());
+            }
+            Item::Constant(c) => {
+                constants.insert(c.name.to_ascii_lowercase(), c.clone());
+            }
+            _ => {}
+        }
+    }
+
     let mut sema = Sema {
         program: resolved.program,
         word_targets: resolved.word_targets,
         user_words,
+        variables,
+        constants,
         user_effects: inferred.user_effects,
         effect_errors,
         call_graph: BTreeMap::new(),
@@ -162,7 +187,7 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
     };
 
     analyse_call_graph(&mut sema);
-    // M2.8 will call analyse_escape(&mut sema) here.
+    analyse_escape(&mut sema);
 
     Ok(sema)
 }
@@ -185,6 +210,118 @@ fn analyse_call_graph(sema: &mut Sema) {
             }
             Item::TopLevel { exprs, .. } => {
                 walk_body_for_refs(exprs, None, sema);
+            }
+            // Variable and Constant carry no expressions to walk.
+            Item::Variable(_) | Item::Constant(_) => {}
+        }
+    }
+}
+
+/// Variable escape analysis (M2.8).
+///
+/// For every `Item::Variable v`, walk every Expr list in the program
+/// (definition bodies, top-level runs, inside any nested control
+/// flow).  At each WordRef whose name matches `v.name`, look at the
+/// *immediately following* expression in the same list:
+///
+///   - `@` / `c@`           narrow sink (fetch)
+///   - `!` / `c!` / `+!`    narrow sink (store)
+///   - anything else         escape — variable is wide
+///
+/// "Anything else" includes: end of list (last expression), the
+/// next expression being a literal, a control-flow node, an
+/// unknown word, or a user-defined word.  Conservative.  Better
+/// to flag wide and miss an optimisation than narrow incorrectly
+/// and miscompile.
+///
+/// First reference that escapes records the reason and span; we
+/// don't enumerate every escaping use.
+pub fn analyse_escape(sema: &mut Sema) {
+    // Build the set of variable names we care about.
+    let var_names: std::collections::BTreeSet<String> =
+        sema.program.items.iter()
+            .filter_map(|i| match i {
+                Item::Variable(v) => Some(v.name.to_ascii_lowercase()),
+                _ => None,
+            })
+            .collect();
+    if var_names.is_empty() { return; }
+
+    // Initialise everyone narrow; we'll demote to Wide on first
+    // escape.  This way a variable referenced zero times is narrow
+    // by default (vacuously true that every use is a narrow sink).
+    for n in &var_names {
+        sema.escape.insert(n.clone(), EscapeState::Narrow);
+    }
+
+    let items = sema.program.items.clone();
+    for item in &items {
+        match item {
+            Item::Definition(d) => walk_block_for_escape(&d.body, &var_names, sema),
+            Item::TopLevel { exprs, .. } => walk_block_for_escape(exprs, &var_names, sema),
+            Item::Variable(_) | Item::Constant(_) => {}
+        }
+    }
+}
+
+fn walk_block_for_escape(
+    exprs: &[Expr],
+    var_names: &std::collections::BTreeSet<String>,
+    sema: &mut Sema,
+) {
+    for (i, e) in exprs.iter().enumerate() {
+        // Recurse into nested blocks first.  A nested block's own
+        // start/end is a boundary — if a variable ref is the LAST
+        // expression of an inner block, it's not "followed" by an
+        // outer-block sink, so we mark it as escaping.
+        match e {
+            Expr::If { then_body, else_body, .. } => {
+                walk_block_for_escape(then_body, var_names, sema);
+                if let Some(eb) = else_body {
+                    walk_block_for_escape(eb, var_names, sema);
+                }
+            }
+            Expr::BeginUntil { body, .. }
+            | Expr::BeginAgain { body, .. }
+            | Expr::DoLoop { body, .. } => {
+                walk_block_for_escape(body, var_names, sema);
+            }
+            Expr::BeginWhileRepeat { pred, body, .. } => {
+                walk_block_for_escape(pred, var_names, sema);
+                walk_block_for_escape(body, var_names, sema);
+            }
+            Expr::Case { arms, default, .. } => {
+                for arm in arms {
+                    walk_block_for_escape(&arm.match_expr, var_names, sema);
+                    walk_block_for_escape(&arm.body, var_names, sema);
+                }
+                if let Some(d) = default {
+                    walk_block_for_escape(d, var_names, sema);
+                }
+            }
+            _ => {}
+        }
+        // Check this expression for a variable reference.
+        let Expr::WordRef { name, span } = e else { continue };
+        let lc = name.to_ascii_lowercase();
+        if !var_names.contains(&lc) { continue; }
+        // Look at the NEXT expression in this block.
+        let reason = match exprs.get(i + 1) {
+            Some(Expr::WordRef { name: next, .. }) => {
+                let nlc = next.to_ascii_lowercase();
+                if matches!(nlc.as_str(), "@" | "!" | "+!" | "c@" | "c!") {
+                    continue; // narrow sink, no escape
+                }
+                EscapeReason::UnknownSink
+            }
+            Some(_) => EscapeReason::UnknownSink,
+            None    => EscapeReason::UnknownSink,
+        };
+        // Only record the FIRST escaping site per variable.
+        match sema.escape.get(&lc) {
+            Some(EscapeState::Wide { .. }) => {}
+            _ => {
+                sema.escape.insert(lc, EscapeState::Wide { reason, at: *span });
             }
         }
     }

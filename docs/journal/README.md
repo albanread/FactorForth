@@ -62,3 +62,9 @@ in six months).
   FORGET is out, replay is the tool we have if we ever want
   it.  Phase 3's REPL gets a clean monotonic accumulation model
   on this foundation.
+- `2026-05-24-m2.8-variables-and-constants.md` — VARIABLE,
+  CONSTANT, FCONSTANT.  Escape analysis picks narrow vs wide;
+  narrow uses Factor SYMBOL: + get-global/set-global/change-
+  global via a peep-emit, wide gets a backing nf-addr.  The
+  `+!` argument-order gotcha (change-global's signature is
+  variable-then-quot) cost one debug cycle.

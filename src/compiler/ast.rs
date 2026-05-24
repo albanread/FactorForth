@@ -25,8 +25,9 @@ pub struct Program {
     pub items: Vec<Item>,
 }
 
-/// Top-level item — either a `:` definition or a run of top-level
-/// (interpreter-state) code.
+/// Top-level item — either a `:` definition, a run of top-level
+/// (interpreter-state) code, or a defining-word form (VARIABLE /
+/// CONSTANT / FCONSTANT).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     /// A `: name ( ... ) body ;` definition.
@@ -36,6 +37,55 @@ pub enum Item {
     /// expressions are folded into a single `TopLevel` for
     /// efficiency.
     TopLevel { exprs: Vec<Expr>, span: Span },
+    /// `VARIABLE name` — declares a one-cell allocation accessible
+    /// via `name` (pushes address) and `@`/`!`/`+!` (memory ops).
+    /// Whether it gets the narrow (Factor SYMBOL) or wide (nf-addr
+    /// tuple) emission depends on escape analysis (sema).
+    Variable(VariableDef),
+    /// `<literal> CONSTANT name` — defines `name` to push a value
+    /// known at compile time.  Folded into a Factor `CONSTANT:`
+    /// so callers see a literal at use sites.
+    Constant(ConstantDef),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariableDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Span from `VARIABLE` keyword through the name token.
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstantDef {
+    pub name: String,
+    pub name_span: Span,
+    pub value: ConstValue,
+    /// Span from the value-expression through the name token.
+    pub span: Span,
+    /// Whether the source used `CONSTANT` (integer-shaped) or
+    /// `FCONSTANT` (float-shaped).  Both flow through the same
+    /// AST node; the discriminator matters for emit.
+    pub flavour: ConstFlavour,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ConstFlavour {
+    /// ANS `CONSTANT` — integer cell.
+    Cell,
+    /// ANS `FCONSTANT` — IEEE-754 double.
+    Float,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ConstValue {
+    Int(i64),
+    Float(f64),
+}
+
+impl ConstValue {
+    pub fn as_int(self) -> Option<i64> { match self { ConstValue::Int(v) => Some(v), _ => None } }
+    pub fn as_float(self) -> Option<f64> { match self { ConstValue::Float(v) => Some(v), _ => None } }
 }
 
 #[derive(Clone, Debug, PartialEq)]

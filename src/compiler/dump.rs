@@ -34,11 +34,11 @@
 
 use std::fmt::Write;
 
-use super::ast::{Expr, Item, Literal, Program};
+use super::ast::{ConstValue, Expr, Item, Literal, Program};
 use super::effect::Effect;
 use super::error::Span;
 use super::lex::{StringKind, Tok, Token};
-use super::sema::{EscapeState, Sema};
+use super::sema::{EscapeReason, EscapeState, Sema};
 
 // ─── Tokens ────────────────────────────────────────────────────────────────
 
@@ -115,6 +115,18 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
         Item::TopLevel { exprs, span } => {
             let _ = writeln!(out, "{indent}TopLevel @ {}", span_str(span));
             for e in exprs { write_expr(out, e, depth + 1); }
+        }
+        Item::Variable(v) => {
+            let _ = writeln!(out, "{indent}Variable `{}` @ {}",
+                             v.name, span_str(&v.span));
+        }
+        Item::Constant(c) => {
+            let val = match c.value {
+                ConstValue::Int(i)   => format!("Int {i}"),
+                ConstValue::Float(f) => format!("Float {f}"),
+            };
+            let _ = writeln!(out, "{indent}Constant `{}` = {val} ({:?}) @ {}",
+                             c.name, c.flavour, span_str(&c.span));
         }
     }
 }
@@ -227,9 +239,43 @@ pub fn dump_sema(s: &Sema) -> String {
         let _ = writeln!(out);
     }
 
-    // Variables / Constants placeholders (M2.8+)
-    let _ = writeln!(out, "Variables: (M2.8 — not yet collected)");
-    let _ = writeln!(out, "Constants: (M2.8 — not yet collected)");
+    // Variables
+    let _ = writeln!(out, "Variables ({}):", s.variables.len());
+    if s.variables.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        for (name, v) in &s.variables {
+            let escape = match s.escape.get(name) {
+                Some(EscapeState::Narrow) => " [narrow]",
+                Some(EscapeState::Wide { reason, .. }) => match reason {
+                    EscapeReason::Duplicated         => " [wide: duplicated]",
+                    EscapeReason::PassedToUnknownWord => " [wide: passed to unknown word]",
+                    EscapeReason::AddressArithmetic  => " [wide: address arithmetic]",
+                    EscapeReason::UnknownSink        => " [wide: unknown sink]",
+                    EscapeReason::PrintedAsValue     => " [wide: printed]",
+                },
+                Some(EscapeState::Unknown) | None => " [unknown]",
+            };
+            let _ = writeln!(out, "  {:<16} def @ {}{escape}",
+                             v.name, span_str(&v.span));
+        }
+    }
+    let _ = writeln!(out);
+
+    // Constants
+    let _ = writeln!(out, "Constants ({}):", s.constants.len());
+    if s.constants.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        for (_, c) in &s.constants {
+            let val = match c.value {
+                ConstValue::Int(i)   => format!("{i}"),
+                ConstValue::Float(f) => format!("{f}"),
+            };
+            let _ = writeln!(out, "  {:<16} = {val:<10} ({:?}) @ {}",
+                             c.name, c.flavour, span_str(&c.span));
+        }
+    }
     let _ = writeln!(out);
 
     // Call graph

@@ -25,10 +25,13 @@
 
 use std::fmt::Write;
 
-use super::ast::{CaseArm, Definition, Expr, Item, Literal, LoopKind, Program};
+use super::ast::{
+    CaseArm, ConstFlavour, ConstValue, ConstantDef, Definition, Expr, Item,
+    Literal, LoopKind, Program, VariableDef,
+};
 use super::lex::StringKind;
 use super::resolve::Target;
-use super::sema::Sema;
+use super::sema::{EscapeState, Sema};
 
 /// Emit options.  Defaults are tuned for "send to embedded VM".
 #[derive(Clone, Debug)]
@@ -58,6 +61,11 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     set.insert("math");
     set.insert("io");
     set.insert("forth.runtime");
+    // `namespaces` for SYMBOL: get-global / set-global / change-global —
+    // used by the narrow-variable path AND by the wide path's
+    // hidden-symbol backing.  Cheap to add even when no variables
+    // are present.
+    set.insert("namespaces");
     for t in s.word_targets.values() {
         if let Some(v) = t.vocab() { set.insert(v); }
     }
@@ -89,6 +97,18 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
                 emit_exprs(exprs, r, &mut out);
                 wrote_top = true;
             }
+            Item::Variable(v) => {
+                if wrote_top { out.push('\n'); wrote_top = false; }
+                emit_variable(v, r, &mut out);
+                out.push('\n');
+                wrote_def = true;
+            }
+            Item::Constant(c) => {
+                if wrote_top { out.push('\n'); wrote_top = false; }
+                emit_constant(c, &mut out);
+                out.push('\n');
+                wrote_def = true;
+            }
         }
     }
     if opts.flush_at_end {
@@ -103,6 +123,61 @@ fn emit_using_line(r: &Sema, out: &mut String) {
     out.push_str("USING:");
     for v in vocabs { out.push(' '); out.push_str(v); }
     out.push_str(" ;\n");
+}
+
+/// Emit a VARIABLE.  Two paths, decided by sema's escape analysis:
+///
+/// **Narrow** (every use is `@`/`!`/`+!`/`c@`/`c!`): the user-visible
+/// "address" is really just an ANS naming convention; we emit a
+/// Factor `SYMBOL:` and translate the @/!/+! sinks to
+/// `get-global`/`set-global`/`change-global` via the peep-emit in
+/// `emit_exprs`.  Factor's optimiser can see across these and
+/// constant-fold or hoist load/store across loops.
+///
+/// **Wide** (address escapes): a backing nf-addr byte-array bound
+/// to a hidden SYMBOL at definition time, plus a wrapping word
+/// that returns the same address on every call (matching ANS).
+/// The address then flows through `forth.runtime:@`/`!`/etc.
+///
+/// Both paths initialise to 0 so `x @` before any `x !` returns 0,
+/// matching ANS (variables read 0 before first store).
+fn emit_variable(v: &VariableDef, r: &Sema, out: &mut String) {
+    let lc = v.name.to_ascii_lowercase();
+    let is_narrow = matches!(r.escape.get(&lc), Some(EscapeState::Narrow));
+    if is_narrow {
+        // Narrow: `SYMBOL: x` defines `x` as a parser-level word
+        // that pushes the symbol itself when executed.  The peep in
+        // emit_exprs translates `x @` to `x get-global` etc.
+        write!(out,
+            "SYMBOL: {n}\n0 {n} set-global",
+            n = v.name).unwrap();
+    } else {
+        // Wide: hidden SYMBOL holds the one nf-addr; user-visible
+        // word returns it.
+        write!(out,
+            "SYMBOL: nf-var-{n}\n<variable> nf-var-{n} set-global\n: {n} ( -- addr ) nf-var-{n} get-global ; inline",
+            n = v.name).unwrap();
+    }
+}
+
+/// Emit a CONSTANT / FCONSTANT.  Factor's `CONSTANT:` is a parsing
+/// word that captures a single literal token at parse time and
+/// creates a constant word.  Identical semantics to ANS.
+fn emit_constant(c: &ConstantDef, out: &mut String) {
+    match c.value {
+        ConstValue::Int(v) => {
+            write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
+        }
+        ConstValue::Float(v) => {
+            // Force decimal point so Factor parses as float, not int.
+            if v.fract() == 0.0 && v.is_finite() {
+                write!(out, "CONSTANT: {} {:.1}", c.name, v).unwrap();
+            } else {
+                write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
+            }
+        }
+    }
+    let _ = c.flavour;  // Cell vs Float discriminator already reflected in value
 }
 
 fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
@@ -121,10 +196,66 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
 
 fn emit_exprs(exprs: &[Expr], r: &Sema, out: &mut String) {
     let mut first = true;
-    for e in exprs {
+    let mut i = 0;
+    while i < exprs.len() {
         if !first { out.push(' '); }
         first = false;
-        emit_expr(e, r, out);
+        // Peep: a WordRef of a narrow variable, followed by a
+        // recognised sink, becomes a Factor-global access in one
+        // step.  Skips both source tokens.
+        if let Some(consumed) = try_emit_narrow_sink(exprs, i, r, out) {
+            i += consumed;
+            continue;
+        }
+        emit_expr(&exprs[i], r, out);
+        i += 1;
+    }
+}
+
+/// If `exprs[i..]` starts with `<narrow-var> @|!|+!|c@|c!`, emit the
+/// corresponding Factor global-access form and return how many
+/// source tokens (always 2) were consumed.  Otherwise None.
+fn try_emit_narrow_sink(
+    exprs: &[Expr],
+    i: usize,
+    r: &Sema,
+    out: &mut String,
+) -> Option<usize> {
+    let cur  = exprs.get(i)?;
+    let next = exprs.get(i + 1)?;
+    let (var_name, _var_span) = match cur {
+        Expr::WordRef { name, span } => (name, span),
+        _ => return None,
+    };
+    let next_name = match next {
+        Expr::WordRef { name, .. } => name,
+        _ => return None,
+    };
+    let var_lc = var_name.to_ascii_lowercase();
+    if !matches!(r.escape.get(&var_lc), Some(EscapeState::Narrow)) {
+        return None;
+    }
+    let next_lc = next_name.to_ascii_lowercase();
+    match next_lc.as_str() {
+        "@" | "c@" => {
+            write!(out, "{var_name} get-global").unwrap();
+            Some(2)
+        }
+        "!" | "c!" => {
+            write!(out, "{var_name} set-global").unwrap();
+            Some(2)
+        }
+        "+!" => {
+            // ANS `value var +!` ⇒ var := var + value.
+            // Factor `change-global` is ( variable quot -- ), so
+            // we emit `var [ + ] change-global` — variable below,
+            // quot on top.  At runtime change-global pops [+]
+            // (quot), pops var (symbol), reads var, calls [+]
+            // with (value, current), stores result.
+            write!(out, "{var_name} [ + ] change-global").unwrap();
+            Some(2)
+        }
+        _ => None,
     }
 }
 

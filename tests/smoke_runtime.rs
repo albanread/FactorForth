@@ -531,6 +531,81 @@ fn phase25_nested_i_and_j() {
     }
 }
 
+// ─── Phase 2.8 — VARIABLE/CONSTANT/FCONSTANT + variable narrowing ───────────
+
+/// The M2.8 plan success criterion verbatim:
+///   `64 constant maxiter  maxiter 2 *` → 128.
+#[test]
+#[ignore]
+fn phase28_constant_folds() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "64 constant maxiter  maxiter 2 * .");
+            assert!(out.contains("128"), "expected 128, got {out:?}");
+        });
+    }
+}
+
+/// Narrow VARIABLE: every use is @/!, so emit lands on Factor
+/// globals.  Round-trip: store 5, fetch, print.
+#[test]
+#[ignore]
+fn phase28_variable_narrow_roundtrip() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "variable counter  5 counter !  counter @ .");
+            assert!(out.contains('5'), "expected 5, got {out:?}");
+        });
+    }
+}
+
+/// `+!` translates to `change-global` for narrow variables.
+#[test]
+#[ignore]
+fn phase28_variable_plus_store() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "variable n  10 n !  3 n +!  n @ .");
+            assert!(out.contains("13"), "expected 13, got {out:?}");
+        });
+    }
+}
+
+/// Multiple constants compose.  `4 constant a  3 constant b  a b * .`
+/// expects 12.
+#[test]
+#[ignore]
+fn phase28_constant_composition() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "4 constant a  3 constant b  a b * .");
+            assert!(out.contains("12"), "expected 12, got {out:?}");
+        });
+    }
+}
+
+/// FCONSTANT round-trip with a float literal.
+#[test]
+#[ignore]
+fn phase28_fconstant_float() {
+    unsafe {
+        with_vm(|api, vm| {
+            // f. (or just .) on a float should produce the value.
+            // forth.runtime:. handles integers; floats go through
+            // Factor's prettyprint here.
+            let out = compile_and_run(api, vm,
+                "3.14 fconstant pi  pi .");
+            // The output for a float will be "3.14" or "3.14 " — accept either.
+            assert!(out.contains("3.14"),
+                    "expected 3.14, got {out:?}");
+        });
+    }
+}
+
 // ─── Phase 2.7 — stack-effect inference ─────────────────────────────────────
 
 /// The M2.7 plan success criterion: a declared effect that doesn't

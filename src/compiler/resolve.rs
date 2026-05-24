@@ -186,17 +186,26 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
     // and recursion resolve correctly.  ANS Forth allows defining a
     // word that calls a later-defined word so long as parsing order
     // doesn't matter at runtime; we follow that.
+    //
+    // `:` defs, VARIABLE, and CONSTANT/FCONSTANT all introduce a
+    // name into the user dictionary.  Redefinition checks fire for
+    // all three uniformly.
+    let mut register = |name: &str, at: Span, items: &mut HashMap<String, Span>| {
+        let lc = name.to_ascii_lowercase();
+        if let Some(prev) = items.get(&lc) {
+            return Err(ResolveError::RedefinedWord {
+                name: name.to_string(), at, prev: *prev,
+            });
+        }
+        items.insert(lc, at);
+        Ok(())
+    };
     for item in &prog.items {
-        if let Item::Definition(d) = item {
-            let lc = d.name.to_ascii_lowercase();
-            if let Some(prev) = user_words.get(&lc) {
-                return Err(ResolveError::RedefinedWord {
-                    name: d.name.clone(),
-                    at: d.name_span,
-                    prev: *prev,
-                });
-            }
-            user_words.insert(lc, d.name_span);
+        match item {
+            Item::Definition(d) => register(&d.name, d.name_span, &mut user_words)?,
+            Item::Variable(v)   => register(&v.name, v.name_span, &mut user_words)?,
+            Item::Constant(c)   => register(&c.name, c.name_span, &mut user_words)?,
+            Item::TopLevel { .. } => {}
         }
     }
 
@@ -206,6 +215,10 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
         match item {
             Item::Definition(d) => resolve_exprs(&d.body, &builtins, &user_words, &mut word_targets)?,
             Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &user_words, &mut word_targets)?,
+            // Variable and Constant carry no expressions to resolve —
+            // their bodies are AST-level data (name + value), not
+            // user-visible word references.
+            Item::Variable(_) | Item::Constant(_) => {}
         }
     }
 
