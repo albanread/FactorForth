@@ -218,16 +218,29 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
     // truth here.  Undeclared definitions get Unknown until we walk
     // their body.
     for item in &r.program.items {
-        if let Item::Definition(d) = item {
-            let lc = d.name.to_ascii_lowercase();
-            let eff = match &d.effect {
-                Some(se) => Effect::known(
-                    se.inputs.len() as u32,
-                    se.outputs.len() as u32,
-                ),
-                None => Effect::Unknown,
-            };
-            user_effects.insert(lc, eff);
+        match item {
+            Item::Definition(d) => {
+                let lc = d.name.to_ascii_lowercase();
+                let eff = match &d.effect {
+                    Some(se) => Effect::known(
+                        se.inputs.len() as u32,
+                        se.outputs.len() as u32,
+                    ),
+                    None => Effect::Unknown,
+                };
+                user_effects.insert(lc, eff);
+            }
+            // Variables and constants push exactly one item per
+            // reference (the address / the value).  This lets
+            // callers like `: foo  x @  ;` infer their body as
+            // ( -- v ) instead of falling back to Unknown.
+            Item::Variable(v) => {
+                user_effects.insert(v.name.to_ascii_lowercase(), Effect::known(0, 1));
+            }
+            Item::Constant(c) => {
+                user_effects.insert(c.name.to_ascii_lowercase(), Effect::known(0, 1));
+            }
+            Item::TopLevel { .. } => {}
         }
     }
 
@@ -304,16 +317,133 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
             env.builtins.get(lc.as_str()).copied().unwrap_or(Effect::Unknown)
         }
 
-        // Control flow — defer rigorous analysis.  Return Unknown so
-        // the caller's check is skipped for bodies that contain
-        // any of these.  Declared effects on enclosing definitions
-        // are still trusted, just not verified.
-        Expr::If { .. }
-        | Expr::BeginUntil { .. }
-        | Expr::BeginWhileRepeat { .. }
-        | Expr::BeginAgain { .. }
-        | Expr::DoLoop { .. }
-        | Expr::Case { .. } => Effect::Unknown,
+        // Control flow.  Each structure has a known formula in
+        // terms of its sub-body effects.  We compute body effects
+        // first, then apply the formula.  Returns Unknown if any
+        // sub-body is Unknown or if a branch shape constraint is
+        // violated (e.g. IF/ELSE branches with different effects).
+        Expr::If { then_body, else_body, .. } => {
+            let then_eff = infer_block(then_body, env);
+            // Consume the flag.
+            let flag = Effect::known(1, 0);
+            match else_body {
+                None => {
+                    // No-else IF: the THEN-body must be balanced
+                    // (i -- i) — the join point requires both
+                    // "body ran" and "body skipped" paths to leave
+                    // the stack the same shape.  If body isn't
+                    // balanced, the overall effect is undefined.
+                    match then_eff {
+                        Effect::Known { inputs, outputs } if inputs == outputs => {
+                            // After flag consumption + body, stack
+                            // depth changes by -1 (the flag) + 0
+                            // (body balanced).  Inputs: 1 flag plus
+                            // body's input requirements.
+                            flag.then(Effect::known(inputs, outputs))
+                        }
+                        Effect::Known { .. } => Effect::Unknown,
+                        Effect::Unknown => Effect::Unknown,
+                    }
+                }
+                Some(eb) => {
+                    // IF/ELSE: both branches must have matching
+                    // effects.  After flag consumption, EITHER
+                    // branch runs.  Total: ( 1 + i -- o ).
+                    let else_eff = infer_block(eb, env);
+                    match (then_eff, else_eff) {
+                        (Effect::Known { inputs: ti, outputs: to },
+                         Effect::Known { inputs: ei, outputs: eo })
+                            if ti == ei && to == eo =>
+                        {
+                            flag.then(Effect::known(ti, to))
+                        }
+                        _ => Effect::Unknown,
+                    }
+                }
+            }
+        }
+
+        Expr::BeginUntil { body, .. } => {
+            // Body should produce a flag each iteration (its outputs
+            // exceed inputs by exactly 1).  After UNTIL consumes the
+            // flag and the loop exits, net effect on the data stack
+            // is zero per iteration.  Net effect of loop: body's
+            // inputs and outputs minus the flag.
+            match infer_block(body, env) {
+                Effect::Known { inputs, outputs }
+                    if outputs >= 1 && outputs == inputs + 1 =>
+                {
+                    Effect::known(inputs, inputs)  // flag consumed by UNTIL
+                }
+                Effect::Known { inputs, outputs } if outputs > inputs => {
+                    // Body produces more than just a flag (e.g.
+                    // accumulator + flag).  Final state has the
+                    // accumulator without the flag.
+                    Effect::known(inputs, outputs - 1)
+                }
+                _ => Effect::Unknown,
+            }
+        }
+
+        Expr::BeginWhileRepeat { pred, body, .. } => {
+            // pred: (i -- i') where i' == i + 1 (produces flag).
+            // body: (i -- i) — preserves shape for next iteration.
+            // After exit, flag is consumed.  Net: (i_pred_in -- i_pred_in).
+            let pred_eff = infer_block(pred, env);
+            let body_eff = infer_block(body, env);
+            match (pred_eff, body_eff) {
+                (Effect::Known { inputs: pi, outputs: po },
+                 Effect::Known { inputs: bi, outputs: bo })
+                    if po == pi + 1 && bi == bo =>
+                {
+                    Effect::known(pi.max(bi), pi.max(bi))
+                }
+                _ => Effect::Unknown,
+            }
+        }
+
+        Expr::BeginAgain { body, .. } => {
+            // Infinite loop — never exits normally.  Effect is
+            // unrepresentable in (in -- out) form.  We approximate
+            // as Unknown; downstream synthesis will emit the
+            // row-variable fallback for any enclosing definition.
+            let _ = infer_block(body, env);
+            Effect::Unknown
+        }
+
+        Expr::DoLoop { body, .. } => {
+            // DO/?DO consumes limit + start (2 inputs).  Body must
+            // be balanced (i -- i) since each iteration restores
+            // the shape.  Net: (2 -- 0).
+            match infer_block(body, env) {
+                Effect::Known { inputs, outputs } if inputs == outputs => {
+                    // Body balanced — loop is (2 -- 0) regardless
+                    // of body inputs (those are dipped beneath the
+                    // loop's limit+start).
+                    Effect::known(2 + inputs, inputs)
+                }
+                _ => Effect::Unknown,
+            }
+        }
+
+        Expr::Case { arms, default, .. } => {
+            // CASE's effect formula is genuinely subtle because
+            // each arm's `match_expr ... OF` sequence pushes a
+            // value that's consumed by the implicit `dup =` —
+            // tracking that through composition needs more careful
+            // accounting than the linear `then` chain handles.
+            //
+            // Simplest correct rule for now: a CASE with no arms
+            // and no default just drops the dispatch (1 -- 0).
+            // Any other shape yields Unknown.  When the formula
+            // is worked out properly, plug it in here; the
+            // synthesised annotation will become tighter.
+            if arms.is_empty() && default.is_none() {
+                Effect::known(1, 0)
+            } else {
+                Effect::Unknown
+            }
+        }
     }
 }
 

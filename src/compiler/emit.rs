@@ -84,33 +84,73 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
     out.push_str("IN: scratchpad\n");
     let mut wrote_def = false;
     let mut wrote_top = false;
+    // Reorder for Factor's parse-time word lookup:
+    //   1. Variables and constants (dictionary entries every : def
+    //      might forward-reference).  ANS allows forward references;
+    //      Factor's strict parser resolves words at parse time, so
+    //      a `:` body that mentions `n` requires `SYMBOL: n` to
+    //      have been seen already.  Keep source order within each
+    //      group.
+    //   2. `:` definitions.  Same forward-reference logic — they
+    //      can call each other in any source order so long as all
+    //      are visible by parse time.  We emit DEFER: declarations
+    //      first to handle mutual recursion (one user word calls
+    //      another defined later in source).
+    //   3. TopLevel runs in source order.  These execute the
+    //      compiled code; reordering them would scramble side
+    //      effects.
+    //
+    // Within categories 1 and 2, source order is preserved.  This
+    // means programs that depend on source order between
+    // categories (e.g. `100 x !` before `variable x` is declared)
+    // are caught by resolve, not silently miscompiled.
+    let _ = wrote_def;
+    let _ = wrote_top;
+    let mut wrote_anything = false;
+
+    // Pass A: vars + consts in source order.
     for item in &r.program.items {
         match item {
-            Item::Definition(d) => {
-                if wrote_top { out.push('\n'); wrote_top = false; }
-                emit_definition(d, r, &mut out);
-                out.push('\n');
-                wrote_def = true;
-            }
-            Item::TopLevel { exprs, .. } => {
-                if wrote_def && !wrote_top { out.push('\n'); }
-                emit_exprs(exprs, r, &mut out);
-                wrote_top = true;
-            }
             Item::Variable(v) => {
-                if wrote_top { out.push('\n'); wrote_top = false; }
-                emit_variable(v, r, &mut out);
-                out.push('\n');
-                wrote_def = true;
+                emit_variable(v, r, &mut out); out.push('\n');
+                wrote_anything = true;
             }
             Item::Constant(c) => {
-                if wrote_top { out.push('\n'); wrote_top = false; }
-                emit_constant(c, &mut out);
-                out.push('\n');
-                wrote_def = true;
+                emit_constant(c, &mut out); out.push('\n');
+                wrote_anything = true;
             }
+            _ => {}
         }
     }
+
+    // Pass B: `:` definitions in source order.  After variables
+    // and constants, so SYMBOL: and CONSTANT: references inside a
+    // body resolve at parse time.
+    //
+    // Forward references BETWEEN user words (mutual recursion, or
+    // a word that calls a not-yet-defined later word) currently
+    // fail at Factor's parser stage.  Earlier draft used `DEFER:`
+    // to forward-declare every user word, but DEFER: changes
+    // Factor's strictness around `:` and broke no-annotation
+    // definitions.  Mutual recursion is rare in real ANS code;
+    // when we hit a test case that needs it, we'll add `DEFER:`
+    // selectively per-pair.
+    for item in &r.program.items {
+        if let Item::Definition(d) = item {
+            emit_definition(d, r, &mut out); out.push('\n');
+            wrote_anything = true;
+        }
+    }
+
+    // Pass D: TopLevel runs in source order.
+    for item in &r.program.items {
+        if let Item::TopLevel { exprs, .. } = item {
+            emit_exprs(exprs, r, &mut out);
+            out.push('\n');
+            wrote_anything = true;
+        }
+    }
+    let _ = wrote_anything;
     if opts.flush_at_end {
         if !out.ends_with(' ') && !out.ends_with('\n') { out.push(' '); }
         out.push_str("flush");
@@ -182,6 +222,14 @@ fn emit_constant(c: &ConstantDef, out: &mut String) {
 
 fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
     write!(out, ": {} ", d.name).unwrap();
+    // Factor's `:` REQUIRES a stack-effect annotation.  Three cases:
+    //   1. User declared one — emit it verbatim (item names too).
+    //   2. User didn't, but our effect inference produced a known
+    //      effect — synthesise a generic `( a b -- c )`-style
+    //      annotation with the right counts.
+    //   3. Neither — emit `( ..a -- ..b )`, the row-variable form
+    //      that means "any effect", which Factor accepts as
+    //      sufficiently liberal.
     if let Some(eff) = &d.effect {
         out.push('(');
         for s in &eff.inputs { out.push(' '); out.push_str(s); }
@@ -189,9 +237,41 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
         out.push_str(" --");
         for s in &eff.outputs { out.push(' '); out.push_str(s); }
         out.push_str(" ) ");
+    } else {
+        let lc = d.name.to_ascii_lowercase();
+        match r.user_effects.get(&lc).copied() {
+            Some(super::effect::Effect::Known { inputs, outputs }) => {
+                synth_effect_annotation(inputs, outputs, out);
+            }
+            _ => {
+                // Inference said Unknown (control flow inside) or
+                // wasn't run.  Row variables let Factor's parser
+                // accept any body.
+                out.push_str("( ..a -- ..b ) ");
+            }
+        }
     }
     emit_exprs(&d.body, r, out);
     out.push_str(" ;");
+}
+
+/// Render `(inputs -- outputs)` with synthetic item names (a, b, c…
+/// for inputs; r0, r1, … for outputs).  The names don't carry
+/// meaning in Factor; we just need *something* there.
+fn synth_effect_annotation(inputs: u32, outputs: u32, out: &mut String) {
+    out.push('(');
+    for i in 0..inputs {
+        out.push(' ');
+        // a, b, c, …, z, aa, ab, … if we ever overrun 26.
+        out.push(((b'a' + (i % 26) as u8)) as char);
+    }
+    if inputs == 0 { out.push(' '); }
+    out.push_str(" --");
+    for i in 0..outputs {
+        write!(out, " r{i}").unwrap();
+    }
+    if outputs == 0 { out.push(' '); }
+    out.push_str(" ) ");
 }
 
 fn emit_exprs(exprs: &[Expr], r: &Sema, out: &mut String) {

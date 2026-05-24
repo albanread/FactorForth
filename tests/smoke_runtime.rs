@@ -588,6 +588,43 @@ fn phase28_constant_composition() {
     }
 }
 
+/// Variable referenced from inside a user word still gets the
+/// narrow path.  Escape analyser descends into definition bodies,
+/// so `: get-n n @ ;` keeps `n` narrow even though the only direct
+/// reference to `n` from top-level is `n !`.
+#[test]
+#[ignore]
+fn phase28_narrow_variable_via_user_word() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                ": load-it n @ ; variable n  5 n !  load-it .");
+            assert!(out.contains('5'), "expected 5, got {out:?}");
+        });
+    }
+}
+
+/// `n n + @` — the user's negative-case probe.  The address gets
+/// used as a value (pointer arithmetic), which our nf-addr model
+/// can't represent.  The escape analyser correctly marks `n` wide;
+/// the wide path emits valid IR; the runtime fails at the `+` step
+/// because nf-addr tuples aren't numbers.  This test compiles AND
+/// confirms escape detection; the runtime failure is documented as
+/// M2.11 work (translate Factor errors into ANS-shaped messages).
+#[test]
+fn phase28_pointer_arithmetic_marked_wide() {
+    use newfactor::compiler::{lex, parse, sema, EscapeState};
+    let src = "variable n  42 n !  n n + @ .";
+    let toks = lex(src).expect("lex");
+    let prog = parse(&toks).expect("parse");
+    let sema = sema::build(prog).expect("sema");
+    // The escape analyser must have flagged n as wide.
+    match sema.escape.get("n") {
+        Some(EscapeState::Wide { .. }) => {} // expected
+        other => panic!("expected n to be Wide, got {other:?}"),
+    }
+}
+
 /// FCONSTANT round-trip with a float literal.
 #[test]
 #[ignore]
