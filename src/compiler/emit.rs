@@ -26,8 +26,9 @@
 use std::fmt::Write;
 
 use super::ast::{
-    CaseArm, ConstFlavour, ConstValue, ConstantDef, Definition, Expr, Item,
-    Literal, LoopKind, Program, VariableDef,
+    CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
+    ConstantDef, CreateDef, Definition, Expr, Item, Literal, LoopKind,
+    Program, VariableDef,
 };
 use super::lex::StringKind;
 use super::resolve::Target;
@@ -108,7 +109,7 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
     let _ = wrote_top;
     let mut wrote_anything = false;
 
-    // Pass A: vars + consts in source order.
+    // Pass A: vars + consts + CREATE buffers in source order.
     for item in &r.program.items {
         match item {
             Item::Variable(v) => {
@@ -117,6 +118,14 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
             }
             Item::Constant(c) => {
                 emit_constant(c, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            Item::Create(cd) => {
+                emit_create(cd, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            Item::Collection(cl) => {
+                emit_collection(cl, &mut out); out.push('\n');
                 wrote_anything = true;
             }
             _ => {}
@@ -198,6 +207,50 @@ fn emit_variable(v: &VariableDef, r: &Sema, out: &mut String) {
             "SYMBOL: nf-var-{n}\n<variable> nf-var-{n} set-global\n: {n} ( -- addr ) nf-var-{n} get-global ; inline",
             n = v.name).unwrap();
     }
+}
+
+/// Emit a standard collection (array / farray / cbuffer).  Three
+/// lines per instance:
+///
+/// 1. `SYMBOL: nf-coll-<name>`               (the storage handle)
+/// 2. `<bytes> <buffer> nf-coll-<name> set-global`  (allocate
+///    `count * elt_size` bytes, store as the handle's value)
+/// 3. `: <name> ( idx -- addr )                     (the accessor)
+///        nf-coll-<name> get-global swap <elt_size> * nf-addr+
+///    ; inline`
+///
+/// The accessor uses `nf-addr+` rather than `+` because + on an
+/// nf-addr fails (our address model is opaque).  Future
+/// optimisation: emit Factor `specialized-array`s when the
+/// elements are known-typed and access patterns are recognisable
+/// — that's a M2.9b+ task.
+fn emit_collection(cl: &CollectionDef, out: &mut String) {
+    let n = &cl.name;
+    let elt_size = cl.kind.elt_size();
+    let total_bytes = cl.count.saturating_mul(elt_size).max(1);
+    let multiplier = elt_size;  // accessor multiplies idx by this
+    write!(out,
+        "SYMBOL: nf-coll-{n}\n{total_bytes} <buffer> nf-coll-{n} set-global\n: {n} ( idx -- addr ) nf-coll-{n} get-global swap {multiplier} * forth.runtime:nf-addr+ ; inline",
+        n = n, total_bytes = total_bytes, multiplier = multiplier,
+    ).unwrap();
+}
+
+/// Emit a CREATE'd data buffer.  Same wide-path pattern as a
+/// variable but the backing byte-array is sized by ALLOT (rather
+/// than a single cell).  CREATE is always emitted wide because
+/// callers do address arithmetic on the result (`name N cells + @`)
+/// which our current escape analyser flags as escape.
+///
+/// DOES> is M2.9b — when it lands, the wrapping word's body picks
+/// up a runtime-action quotation.  For now CREATE without DOES>
+/// just exposes the address.
+fn emit_create(cd: &CreateDef, out: &mut String) {
+    let n = &cd.name;
+    let bytes = cd.allotted_bytes.max(1); // 0-byte buffers aren't useful
+    write!(out,
+        "SYMBOL: nf-create-{n}\n{bytes} <buffer> nf-create-{n} set-global\n: {n} ( -- addr ) nf-create-{n} get-global ; inline",
+        n = n, bytes = bytes,
+    ).unwrap();
 }
 
 /// Emit a CONSTANT / FCONSTANT.  Factor's `CONSTANT:` is a parsing

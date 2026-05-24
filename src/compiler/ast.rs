@@ -46,6 +46,81 @@ pub enum Item {
     /// known at compile time.  Folded into a Factor `CONSTANT:`
     /// so callers see a literal at use sites.
     Constant(ConstantDef),
+
+    /// `CREATE name [N ALLOT | N CELLS ALLOT]` — defines `name`
+    /// to push a base address for a named data buffer.  Size is
+    /// captured at parse time from any immediately-following
+    /// ALLOT pattern.  DOES> is a separate milestone; CREATE
+    /// without DOES> just exposes the address (same as VARIABLE
+    /// but variable-sized).
+    ///
+    /// CREATE remains as the escape hatch for novel data shapes
+    /// — the standard library's `array` / `farray` / `cbuffer`
+    /// cover the common cases without exposing pointer arithmetic.
+    Create(CreateDef),
+
+    /// Standard application-oriented collection defining-words.
+    /// `4 array primes`, `240 farray xs`, `80 cbuffer line`.
+    /// Each instance is callable as `( idx -- addr )`; user
+    /// then uses `@`/`!` (array), `f@`/`f!` (farray), or `c@`/`c!`
+    /// (cbuffer) to access the element.
+    Collection(CollectionDef),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollectionDef {
+    pub name: String,
+    pub name_span: Span,
+    pub kind: CollectionKind,
+    /// Number of *elements* (not bytes).  array/farray count cells;
+    /// cbuffer counts bytes.  Backing storage is `count * elt_size`
+    /// bytes where elt_size is 8 (cells) or 1 (bytes).
+    pub count: u32,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CollectionKind {
+    /// `array`: n cells, accessed with `@`/`!`.  Integer semantics.
+    Array,
+    /// `farray`: n cells, accessed with `f@`/`f!`.  IEEE double.
+    FArray,
+    /// `cbuffer`: n bytes, accessed with `c@`/`c!`.
+    CBuffer,
+}
+
+impl CollectionKind {
+    /// Bytes per element.  Drives both backing-storage size and
+    /// the `cells`/`chars` multiplier in the accessor.
+    pub fn elt_size(self) -> u32 {
+        match self {
+            CollectionKind::Array | CollectionKind::FArray => 8,
+            CollectionKind::CBuffer => 1,
+        }
+    }
+
+    /// The ANS keyword used to introduce this collection.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            CollectionKind::Array   => "array",
+            CollectionKind::FArray  => "farray",
+            CollectionKind::CBuffer => "cbuffer",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreateDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Total byte count to allocate for the buffer.  Always a
+    /// multiple of 8 when the source used `CELLS ALLOT`; arbitrary
+    /// bytes when plain `ALLOT`.  Zero means CREATE without any
+    /// ALLOT — useful for marker-style words.
+    pub allotted_bytes: u32,
+    /// Span from `CREATE` through the last consumed ALLOT token
+    /// (or the name token if there was no ALLOT).
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

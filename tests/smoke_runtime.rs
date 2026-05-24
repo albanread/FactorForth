@@ -645,17 +645,23 @@ fn phase28_fconstant_float() {
 
 // ─── Phase 2.7 — stack-effect inference ─────────────────────────────────────
 
-/// The M2.7 plan success criterion: a declared effect that doesn't
-/// match the body's behaviour is rejected by `compile` before the
-/// IR ever reaches the VM.  We don't even instantiate a VM here —
-/// the failure happens in pure Rust, no Factor involvement.
+/// The M2.7 / "warn don't fail" diagnostic check: a declared effect
+/// that doesn't match the body's behaviour is reported as a
+/// *warning* on the Sema, but the compile still produces IR.
+/// This matches the IDE-style policy: we surface ambiguity, we
+/// don't block the user from running their program.
 #[test]
 fn phase27_canonical_effect_mismatch() {
-    let err = newfactor::compiler::compile(": bad ( -- ) 1 2 ;")
-        .expect_err("expected effect mismatch error");
-    assert!(err.contains("bad"),     "expected word name in error: {err}");
-    assert!(err.contains("declared"), "expected 'declared' in error: {err}");
-    assert!(err.contains("2"),       "expected '2' (the actual output count): {err}");
+    let (ir, warnings) = newfactor::compiler::compile_with_diagnostics(
+        ": bad ( -- ) 1 2 ;"
+    ).expect("compile should succeed despite mismatch");
+    assert!(!ir.is_empty(), "compile should still produce IR");
+    assert_eq!(warnings.len(), 1, "expected exactly one diagnostic, got {warnings:?}");
+    let msg = warnings[0].to_string();
+    assert!(msg.contains("bad"),      "expected word name in warning: {msg}");
+    assert!(msg.contains("declared"),  "expected 'declared' in warning: {msg}");
+    assert!(msg.contains("2"),        "expected '2' in warning: {msg}");
+    assert!(msg.contains("warning"),  "diagnostic should be labelled warning: {msg}");
 }
 
 /// Passing programs from earlier milestones still compile cleanly —
@@ -671,6 +677,76 @@ fn phase27_correct_programs_still_compile() {
     ] {
         newfactor::compiler::compile(src)
             .unwrap_or_else(|e| panic!("compile failed for {src:?}: {e}"));
+    }
+}
+
+// ─── Phase 2.9 — standard defining-words (array, farray, cbuffer) ───────────
+
+/// `array` — n-cell integer array, `( idx -- addr )` instance.
+/// Store + fetch round-trip through two distinct indices.
+#[test]
+#[ignore]
+fn phase29_array_roundtrip() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "4 array primes  \
+                 2 0 primes !  3 1 primes !  \
+                 0 primes @ .  1 primes @ .");
+            assert!(out.contains('2') && out.contains('3'),
+                    "expected '2 3', got {out:?}");
+        });
+    }
+}
+
+/// `farray` — IEEE-754 doubles, `f@`/`f!` accessors.
+#[test]
+#[ignore]
+fn phase29_farray_roundtrip() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "3 farray xs  \
+                 3.14 0 xs f!  2.71 1 xs f!  \
+                 0 xs f@ .  1 xs f@ .");
+            assert!(out.contains("3.14") && out.contains("2.71"),
+                    "expected '3.14' and '2.71', got {out:?}");
+        });
+    }
+}
+
+/// `cbuffer` — n-byte buffer, `c@`/`c!` access.  Write 'H' and 'i'
+/// as ASCII, emit both.
+#[test]
+#[ignore]
+fn phase29_cbuffer_roundtrip() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "10 cbuffer line  \
+                 72 0 line c!  105 1 line c!  \
+                 0 line c@ emit  1 line c@ emit");
+            assert!(out.contains("Hi"), "expected 'Hi', got {out:?}");
+        });
+    }
+}
+
+/// A heavier check: write all 10 integers into an array via a
+/// DO/LOOP, then sum them back via another DO/LOOP.  Tests
+/// indexed access composed with control flow.
+#[test]
+#[ignore]
+fn phase29_array_loop_sum() {
+    unsafe {
+        with_vm(|api, vm| {
+            let out = compile_and_run(api, vm,
+                "10 array xs  \
+                 : init  10 0 ?do  i i xs !  loop ; \
+                 : sum  0  10 0 ?do  i xs @ +  loop ; \
+                 init  sum .");
+            // sum 0..9 = 45
+            assert!(out.contains("45"), "expected '45', got {out:?}");
+        });
     }
 }
 

@@ -28,8 +28,9 @@ pub mod resolve;
 pub mod sema;
 
 pub use ast::{
-    CaseArm, ConstFlavour, ConstValue, ConstantDef, Definition, Expr, Item,
-    Literal, LoopKind, Program, StackEffect, VariableDef,
+    CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
+    ConstantDef, CreateDef, Definition, Expr, Item, Literal, LoopKind,
+    Program, StackEffect, VariableDef,
 };
 pub use effect::{infer, Effect, EffectError, Inferred};
 pub use emit::{emit, EmitOpts};

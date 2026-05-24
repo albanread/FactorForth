@@ -159,6 +159,18 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("c@",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "c@" }),
         ("c!",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-c!" }),
         ("+!",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-+!" }),
+
+        // Cell/char arithmetic — used to index into CREATE'd
+        // arrays.  Implementations live in forth.runtime; they
+        // also work on addresses produced by VARIABLE / CREATE.
+        ("cell+",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cell+" }),
+        ("char+",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "char+" }),
+        ("cells",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cells" }),
+        ("chars",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "chars" }),
+
+        // Float memory ops — used by `farray` instances.
+        ("f@", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f@" }),
+        ("f!", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-f!" }),
     ];
     entries.iter().map(|(k, v)| (*k, v.clone())).collect()
 }
@@ -202,9 +214,11 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
     };
     for item in &prog.items {
         match item {
-            Item::Definition(d) => register(&d.name, d.name_span, &mut user_words)?,
-            Item::Variable(v)   => register(&v.name, v.name_span, &mut user_words)?,
-            Item::Constant(c)   => register(&c.name, c.name_span, &mut user_words)?,
+            Item::Definition(d)  => register(&d.name, d.name_span, &mut user_words)?,
+            Item::Variable(v)    => register(&v.name, v.name_span, &mut user_words)?,
+            Item::Constant(c)    => register(&c.name, c.name_span, &mut user_words)?,
+            Item::Create(cd)     => register(&cd.name, cd.name_span, &mut user_words)?,
+            Item::Collection(cl) => register(&cl.name, cl.name_span, &mut user_words)?,
             Item::TopLevel { .. } => {}
         }
     }
@@ -215,10 +229,11 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
         match item {
             Item::Definition(d) => resolve_exprs(&d.body, &builtins, &user_words, &mut word_targets)?,
             Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &user_words, &mut word_targets)?,
-            // Variable and Constant carry no expressions to resolve —
-            // their bodies are AST-level data (name + value), not
-            // user-visible word references.
-            Item::Variable(_) | Item::Constant(_) => {}
+            // Variable, Constant, Create, Collection carry no
+            // expressions to resolve — their bodies are AST-level
+            // data (name + value or buffer size), not user-visible
+            // word references.
+            Item::Variable(_) | Item::Constant(_) | Item::Create(_) | Item::Collection(_) => {}
         }
     }
 

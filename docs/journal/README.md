@@ -75,3 +75,10 @@ in six months).
   BEGIN/WHILE/REPEAT, DO/LOOP).  Two separate effect maps in
   Sema: `user_effects` for caller typing, `body_effects` for
   ground truth.
+- `2026-05-24-m2.9-collections.md` — "ANS Forth for applications,
+  not micros."  Standard defining-words (`array`, `farray`,
+  `cbuffer`) ship as built-in parser patterns; users get typed
+  collections without ever writing CREATE/DOES>.  The user's
+  three-step reframing of M2.9 from "model the byte-poking
+  primitives" to "provide the common defining-words and reduce
+  the need for byte-poking in the first place."

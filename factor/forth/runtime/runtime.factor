@@ -58,8 +58,8 @@ TUPLE: nf-addr
 ! Address arithmetic.  An ANS address can have an integer added or
 ! subtracted to it (within the same allocation), staying inside the
 ! original byte-array.
-: nf-addr+ ( addr n -- addr' )
-    [ off>> + ] [ ba>> ] bi swap <nf-addr> ; inline
+:: nf-addr+ ( addr n -- addr' )
+    addr ba>> addr off>> n + <nf-addr> ; inline
 
 : cell+ ( addr -- addr' )  8 nf-addr+ ; inline
 : char+ ( addr -- addr' )  1 nf-addr+ ; inline
@@ -102,6 +102,19 @@ TUPLE: nf-addr
 
 : nf-+! ( n addr -- )
     [ @ + ] [ nf-! ] bi ; inline
+
+! ── ANS float fetch/store ──
+!
+! `f@` reads an IEEE-754 double from an nf-addr; `nf-f!` stores
+! one.  Both go through Factor's `alien-double` accessor.  Used
+! by the `farray` defining-word: a cell-wide buffer with float
+! semantics on access.
+
+: f@ ( addr -- f )
+    [ ba>> ] [ off>> ] bi alien-double ; inline
+
+: nf-f! ( f addr -- )
+    [ ba>> ] [ off>> ] bi set-alien-double ; inline
 
 ! ── Raw native pointer (for FFI) ──
 !

@@ -210,6 +210,16 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("c!", e(2, 0));
     m.insert("+!", e(2, 0));
 
+    // Cell/char arithmetic
+    m.insert("cell+", e(1, 1));
+    m.insert("char+", e(1, 1));
+    m.insert("cells", e(1, 1));
+    m.insert("chars", e(1, 1));
+
+    // Float memory ops
+    m.insert("f@", e(1, 1));
+    m.insert("f!", e(2, 0));
+
     m
 }
 
@@ -266,6 +276,16 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
             }
             Item::Constant(c) => {
                 user_effects.insert(c.name.to_ascii_lowercase(), Effect::known(0, 1));
+            }
+            Item::Create(cd) => {
+                // CREATE'd words push their data-space base address.
+                user_effects.insert(cd.name.to_ascii_lowercase(), Effect::known(0, 1));
+            }
+            Item::Collection(cl) => {
+                // Collection instances are `( idx -- addr )` — they
+                // take an index and return the address of that
+                // element.  Net effect (1 -- 1).
+                user_effects.insert(cl.name.to_ascii_lowercase(), Effect::known(1, 1));
             }
             Item::TopLevel { .. } => {}
         }

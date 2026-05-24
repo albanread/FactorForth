@@ -41,7 +41,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::ast::{ConstantDef, Expr, Item, Program, VariableDef};
+use super::ast::{
+    CollectionDef, ConstantDef, CreateDef, Expr, Item, Program, VariableDef,
+};
 use super::effect::{infer, Effect, EffectError};
 use super::error::Span;
 use super::resolve::{resolve, ResolveError, Target};
@@ -102,13 +104,20 @@ pub struct Sema {
     pub word_targets: HashMap<Span, Target>,
     pub user_words:   HashMap<String, UserWord>,
 
-    // ── M2.8 dictionary entries (variables and constants) ────────
+    // ── M2.8 / M2.9 dictionary entries ───────────────────────────
     /// Variable name (lowercased) → its declaration.  Kept separate
     /// from `user_words` so escape analysis and emit can iterate
     /// over them without filtering.
     pub variables: BTreeMap<String, VariableDef>,
     /// Constant name (lowercased) → declaration (carries value).
     pub constants: BTreeMap<String, ConstantDef>,
+    /// CREATE'd data buffer name (lowercased) → declaration.  Each
+    /// CREATE allocates a byte-array backing store sized by ALLOT.
+    pub creates: BTreeMap<String, CreateDef>,
+    /// Standard-collection-defining-word instances (array, farray,
+    /// cbuffer) keyed by lowercase name.  Sema's primary view of
+    /// what user-named collections exist.
+    pub collections: BTreeMap<String, CollectionDef>,
 
     // ── From effect ──────────────────────────────────────────────
     /// Callers' view of a word's effect: declared if present, else
@@ -164,9 +173,12 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
         }
     }
 
-    // Collect variables and constants into their own tables.
+    // Collect variables, constants, and CREATE'd buffers into
+    // their own tables.
     let mut variables: BTreeMap<String, VariableDef> = BTreeMap::new();
     let mut constants: BTreeMap<String, ConstantDef> = BTreeMap::new();
+    let mut creates:   BTreeMap<String, CreateDef>   = BTreeMap::new();
+    let mut collections: BTreeMap<String, CollectionDef> = BTreeMap::new();
     for item in &resolved.program.items {
         match item {
             Item::Variable(v) => {
@@ -174,6 +186,12 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
             }
             Item::Constant(c) => {
                 constants.insert(c.name.to_ascii_lowercase(), c.clone());
+            }
+            Item::Create(cd) => {
+                creates.insert(cd.name.to_ascii_lowercase(), cd.clone());
+            }
+            Item::Collection(cl) => {
+                collections.insert(cl.name.to_ascii_lowercase(), cl.clone());
             }
             _ => {}
         }
@@ -185,6 +203,8 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
         user_words,
         variables,
         constants,
+        creates,
+        collections,
         user_effects: inferred.user_effects,
         body_effects: inferred.body_effects,
         effect_errors,
@@ -218,8 +238,10 @@ fn analyse_call_graph(sema: &mut Sema) {
             Item::TopLevel { exprs, .. } => {
                 walk_body_for_refs(exprs, None, sema);
             }
-            // Variable and Constant carry no expressions to walk.
-            Item::Variable(_) | Item::Constant(_) => {}
+            // Variable, Constant, Create, Collection carry no
+            // expressions to walk.
+            Item::Variable(_) | Item::Constant(_)
+            | Item::Create(_) | Item::Collection(_) => {}
         }
     }
 }
@@ -266,7 +288,8 @@ pub fn analyse_escape(sema: &mut Sema) {
         match item {
             Item::Definition(d) => walk_block_for_escape(&d.body, &var_names, sema),
             Item::TopLevel { exprs, .. } => walk_block_for_escape(exprs, &var_names, sema),
-            Item::Variable(_) | Item::Constant(_) => {}
+            Item::Variable(_) | Item::Constant(_)
+            | Item::Create(_) | Item::Collection(_) => {}
         }
     }
 }

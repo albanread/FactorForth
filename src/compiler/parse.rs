@@ -204,6 +204,116 @@ impl<'t> Parser<'t> {
                         span: Span { start: kw_span.start, end: name_span.end },
                     }));
                 }
+                Some("create") => {
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();
+                    let name_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: "CREATE", at: kw_span },
+                    )?;
+                    let (name, name_span) = match &name_tok.kind {
+                        Tok::Word(w) => (w.clone(), name_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "CREATE", at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    // Look-ahead: capture optional `N ALLOT` or
+                    // `N CELLS ALLOT` immediately after the name.
+                    // Both forms only match when N is a literal int.
+                    let mut allotted: u32 = 0;
+                    let mut end_span = name_span;
+                    loop {
+                        // Save current position to roll back on mismatch.
+                        let save_i = self.i;
+                        self.skip_comments();
+                        let Some(n_tok) = self.peek() else { self.i = save_i; break; };
+                        let n_val = match &n_tok.kind {
+                            Tok::Int { value, .. } if *value >= 0 => *value as u32,
+                            _ => { self.i = save_i; break; }
+                        };
+                        let n_span = n_tok.span;
+                        self.bump();
+                        // Check for CELLS optionally, then ALLOT.
+                        self.skip_comments();
+                        let mut multiplier: u32 = 1;
+                        if let Some(t2) = self.peek() {
+                            if let Tok::Word(w2) = &t2.kind {
+                                if w2.eq_ignore_ascii_case("cells") {
+                                    multiplier = 8;
+                                    self.bump();
+                                    self.skip_comments();
+                                } else if w2.eq_ignore_ascii_case("chars") {
+                                    multiplier = 1; // ANS: 1 char = 1 byte
+                                    self.bump();
+                                    self.skip_comments();
+                                }
+                            }
+                        }
+                        // Require ALLOT now.
+                        let Some(allot_tok) = self.peek() else {
+                            self.i = save_i; break;
+                        };
+                        match &allot_tok.kind {
+                            Tok::Word(w) if w.eq_ignore_ascii_case("allot") => {
+                                allotted = allotted.saturating_add(
+                                    n_val.saturating_mul(multiplier),
+                                );
+                                end_span = allot_tok.span;
+                                self.bump();
+                            }
+                            _ => { self.i = save_i; break; }
+                        }
+                        let _ = n_span;
+                        // Loop to pick up further N ALLOT runs if any.
+                    }
+                    items.push(Item::Create(CreateDef {
+                        name, name_span, allotted_bytes: allotted,
+                        span: Span { start: kw_span.start, end: end_span.end },
+                    }));
+                }
+                Some(kw @ ("array" | "farray" | "cbuffer")) => {
+                    let kw_static: &'static str = match kw {
+                        "array"   => "ARRAY",
+                        "farray"  => "FARRAY",
+                        "cbuffer" => "CBUFFER",
+                        _ => unreachable!(),
+                    };
+                    let kw_span = t.span;
+                    // Size: the immediately-preceding pending expr.
+                    // Must be a non-negative literal integer.
+                    let size_expr = pending.pop().ok_or(
+                        ParseError::ConstantWithoutValue { keyword: kw_static, at: kw_span },
+                    )?;
+                    let count = match &size_expr {
+                        Expr::Lit(Literal::Int { value, .. }) if *value >= 0 => *value as u32,
+                        _ => return Err(ParseError::NonLiteralConstantValue {
+                            keyword: kw_static, at: size_expr.span(),
+                        }),
+                    };
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    self.bump(); // consume the collection keyword
+                    let name_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: kw_static, at: kw_span },
+                    )?;
+                    let (name, name_span) = match &name_tok.kind {
+                        Tok::Word(w) => (w.clone(), name_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: kw_static, at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    let kind = match kw {
+                        "array"   => CollectionKind::Array,
+                        "farray"  => CollectionKind::FArray,
+                        "cbuffer" => CollectionKind::CBuffer,
+                        _ => unreachable!(),
+                    };
+                    items.push(Item::Collection(CollectionDef {
+                        name, name_span, kind, count,
+                        span: Span { start: size_expr.span().start, end: name_span.end },
+                    }));
+                }
                 Some(kw @ ("constant" | "fconstant")) => {
                     let kw_static: &'static str = if kw == "constant" { "CONSTANT" } else { "FCONSTANT" };
                     let kw_span = t.span;

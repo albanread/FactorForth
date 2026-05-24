@@ -34,7 +34,7 @@
 
 use std::fmt::Write;
 
-use super::ast::{ConstValue, Expr, Item, Literal, Program};
+use super::ast::{CollectionKind, ConstValue, Expr, Item, Literal, Program};
 use super::effect::Effect;
 use super::error::Span;
 use super::lex::{StringKind, Tok, Token};
@@ -127,6 +127,23 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
             };
             let _ = writeln!(out, "{indent}Constant `{}` = {val} ({:?}) @ {}",
                              c.name, c.flavour, span_str(&c.span));
+        }
+        Item::Create(cd) => {
+            let _ = writeln!(out, "{indent}Create `{}` allotted {} byte{} @ {}",
+                             cd.name, cd.allotted_bytes,
+                             if cd.allotted_bytes == 1 { "" } else { "s" },
+                             span_str(&cd.span));
+        }
+        Item::Collection(cl) => {
+            let _ = writeln!(out, "{indent}{} `{}` ({} element{}) @ {}",
+                             match cl.kind {
+                                 CollectionKind::Array   => "Array",
+                                 CollectionKind::FArray  => "FArray",
+                                 CollectionKind::CBuffer => "CBuffer",
+                             },
+                             cl.name, cl.count,
+                             if cl.count == 1 { "" } else { "s" },
+                             span_str(&cl.span));
         }
     }
 }
@@ -274,6 +291,36 @@ pub fn dump_sema(s: &Sema) -> String {
             };
             let _ = writeln!(out, "  {:<16} = {val:<10} ({:?}) @ {}",
                              c.name, c.flavour, span_str(&c.span));
+        }
+    }
+    let _ = writeln!(out);
+
+    // CREATE'd data buffers
+    let _ = writeln!(out, "CREATEs ({}):", s.creates.len());
+    if s.creates.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        for (_, cd) in &s.creates {
+            let _ = writeln!(out, "  {:<16} {} byte{} @ {}",
+                             cd.name, cd.allotted_bytes,
+                             if cd.allotted_bytes == 1 { "" } else { "s" },
+                             span_str(&cd.span));
+        }
+    }
+    let _ = writeln!(out);
+
+    // Standard collections (array / farray / cbuffer)
+    let _ = writeln!(out, "Collections ({}):", s.collections.len());
+    if s.collections.is_empty() {
+        let _ = writeln!(out, "  (none)");
+    } else {
+        for (_, cl) in &s.collections {
+            let _ = writeln!(out, "  {:<16} {:<8} ×{:<6} ({} bytes) @ {}",
+                             cl.name,
+                             cl.kind.keyword(),
+                             cl.count,
+                             cl.count.saturating_mul(cl.kind.elt_size()),
+                             span_str(&cl.span));
         }
     }
     let _ = writeln!(out);
