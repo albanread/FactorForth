@@ -204,15 +204,24 @@ pub enum ConstFlavour {
     Float,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConstValue {
     Int(i64),
     Float(f64),
+    /// Computed: the value is the result of evaluating the
+    /// expression sequence at runtime once.  Emitted as
+    /// `: name ( -- v ) <body> ; inline` so Factor's compiler
+    /// constant-folds it to the same machine code as the
+    /// literal form whenever the body is pure.
+    ///
+    /// Stores the pending expressions in source order (the
+    /// stack-effect order they'd execute in plain Forth).
+    Computed(Vec<Expr>),
 }
 
 impl ConstValue {
-    pub fn as_int(self) -> Option<i64> { match self { ConstValue::Int(v) => Some(v), _ => None } }
-    pub fn as_float(self) -> Option<f64> { match self { ConstValue::Float(v) => Some(v), _ => None } }
+    pub fn as_int(&self) -> Option<i64> { match self { ConstValue::Int(v) => Some(*v), _ => None } }
+    pub fn as_float(&self) -> Option<f64> { match self { ConstValue::Float(v) => Some(*v), _ => None } }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -334,6 +343,24 @@ pub enum Expr {
         default: Option<Vec<Expr>>,
         span: Span,
     },
+
+    /// `' name` — the ANS tick parsing word.  At parse time the
+    /// next blank-delimited token is captured as `name`; at runtime
+    /// the word's execution token (XT) is pushed onto the stack.
+    /// Used with `EXECUTE`, `IS`, or stored in a variable for
+    /// later dispatch.  Effect: `( -- xt )`.
+    Tick { name: String, span: Span },
+
+    /// `LET (inputs) -> (outputs) = expr,... [WHERE ...]* END` —
+    /// the infix-algebraic sub-language.  Parsed by `let_lang`
+    /// at lex time (the lexer captures the whole block as a
+    /// single token); the parsed `LetForm` is carried here for
+    /// codegen.  Effect: `( ..a in1..inN -- ..a out1..outM )`
+    /// where N = inputs.len(), M = outputs.len().
+    LetForm {
+        form: super::let_lang::LetForm,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -376,6 +403,8 @@ impl Expr {
             Expr::BeginAgain       { span, .. } => *span,
             Expr::DoLoop           { span, .. } => *span,
             Expr::Case             { span, .. } => *span,
+            Expr::Tick             { span, .. } => *span,
+            Expr::LetForm          { span, .. } => *span,
         }
     }
 }

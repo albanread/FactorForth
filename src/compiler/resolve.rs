@@ -65,6 +65,12 @@ impl Target {
 pub enum ResolveError {
     UnknownWord { name: String, at: Span },
     RedefinedWord { name: String, at: Span, prev: Span },
+    /// A `:` definition uses `RECURSE` but has no `( a -- b )`
+    /// stack-effect annotation.  Factor's strict effect checker
+    /// can't compile recursive bodies without one — surface the
+    /// requirement here with a clear message rather than letting
+    /// Factor reject the IR.
+    RecurseNeedsEffect { word: String, at: Span },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -74,6 +80,9 @@ impl std::fmt::Display for ResolveError {
                 write!(f, "unknown word `{name}` at {at}"),
             ResolveError::RedefinedWord { name, at, prev } =>
                 write!(f, "redefinition of `{name}` at {at} (previously defined at {prev})"),
+            ResolveError::RecurseNeedsEffect { word, at } =>
+                write!(f, "`{word}` at {at} uses RECURSE but has no stack-effect annotation \
+                           — add `( ... -- ... )` after the name"),
         }
     }
 }
@@ -108,33 +117,61 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("rot",  Builtin { vocab: "kernel", factor_name: "rot"  }),
         ("nip",  Builtin { vocab: "kernel", factor_name: "nip"  }),
         ("tuck", Builtin { vocab: "kernel", factor_name: "tuck" }),
+        // ANS stack words defined in forth.runtime.
+        //
+        // `?DUP` is intentionally NOT exposed here.  It's
+        // stack-effect-polymorphic ( x -- 0 | x x ) which Factor's
+        // strict static inference rejects: the runtime.factor body
+        // `dup [ dup ] when` has uneven `if` branches.  Modern Forth
+        // code prefers `dup IF ... THEN` over `?dup IF ... THEN`;
+        // we'll revisit if a real-world ANS program needs it (e.g.
+        // an emit-time inline-rewrite to `dup [ dup ] when` after
+        // we disable per-def Factor inference, or as a macro).
+        ("depth", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "depth" }),
+
+        // ANS return-stack words.  Factor's data-stack-only model means
+        // these route through a separate Forth-return-stack tuple
+        // (see forth.runtime §2).  They're NOT Factor's own >r/r>/r@
+        // (which manipulate the retainstack and are restricted).
+        (">r",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: ">r"    }),
+        ("r>",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "r>"    }),
+        ("r@",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "r@"    }),
+        ("rdrop", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "rdrop" }),
+        ("2>r",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "2>r"   }),
+        ("2r>",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "2r>"   }),
 
         // Arithmetic ─ math (Factor's `+ - * /` are not in `kernel`)
         ("+",    Builtin { vocab: "math", factor_name: "+"   }),
         ("-",    Builtin { vocab: "math", factor_name: "-"   }),
         ("*",    Builtin { vocab: "math", factor_name: "*"   }),
         ("/",    Builtin { vocab: "math", factor_name: "/i"  }),  // ANS / is integer-divide
-        ("mod",  Builtin { vocab: "math", factor_name: "mod" }),
+        // ANS MOD is floored-division remainder (sign follows divisor).
+        // Factor's math:mod is truncated (sign follows dividend) — wrong
+        // for ANS.  Our forth.runtime:floored-mod implements the right
+        // semantics for negative operands.  Task #42.
+        ("mod",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "floored-mod" }),
         ("negate", Builtin { vocab: "math", factor_name: "neg" }),
         ("abs",  Builtin { vocab: "math", factor_name: "abs" }),
         ("min",  Builtin { vocab: "math.order", factor_name: "min" }),
         ("max",  Builtin { vocab: "math.order", factor_name: "max" }),
 
-        // Comparisons.  ANS returns -1/0; Factor returns t/f.
-        // `IF` works on Factor's truthy semantics (anything-not-f is
-        // true), so comparisons that feed straight into `IF` flow
-        // without conversion.  If user code stores a flag and uses
-        // it as a numeric value later, M2.7's effect inference flags
-        // that case for a later `flag>` insertion.
-        ("=",   Builtin { vocab: "kernel",     factor_name: "=" }),
-        ("<>",  Builtin { vocab: "kernel",     factor_name: "/=" }),
-        ("<",   Builtin { vocab: "math.order", factor_name: "<"  }),
-        (">",   Builtin { vocab: "math.order", factor_name: ">"  }),
-        ("<=",  Builtin { vocab: "math.order", factor_name: "<=" }),
-        (">=",  Builtin { vocab: "math.order", factor_name: ">=" }),
-        ("0=",  Builtin { vocab: "math",       factor_name: "zero?" }),
-        ("0<",  Builtin { vocab: "math.order", factor_name: "neg?" }),
-        ("0>",  Builtin { vocab: "math.order", factor_name: "pos?" }),
+        // Comparisons return ANS -1 / 0 (NOT Factor's t / f).
+        // M3.0.2 (#40): each comparator routes through an `ans*`
+        // wrapper in forth.runtime that suffixes `bool>flag` to
+        // convert Factor's boolean to ANS's -1 / 0 representation.
+        // emit.rs::Expr::If wraps the consumed flag with a
+        // `math:zero? not` before Factor's `kernel:if` so that
+        // ANS 0 (false) becomes Factor's `f` and any nonzero value
+        // becomes `t`.
+        ("=",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans=" }),
+        ("<>",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans<>" }),
+        ("<",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans<" }),
+        (">",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans>" }),
+        ("<=",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans<=" }),
+        (">=",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans>=" }),
+        ("0=",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans0=" }),
+        ("0<",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans0<" }),
+        ("0>",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans0>" }),
 
         // Bitwise (ANS AND/OR/XOR/NOT are bitwise, not logical).
         ("and", Builtin { vocab: "math.bitwise", factor_name: "bitand" }),
@@ -152,6 +189,7 @@ fn builtin_table() -> HashMap<&'static str, Target> {
 
         // I/O — `.` collides with prettyprint, so always FQ
         (".",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "." }),
+        ("u.", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "u." }),
         ("cr", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cr" }),
         ("emit", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "emit" }),
         ("space", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "space" }),
@@ -165,6 +203,12 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("cmove", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "cmove" }),
         ("fill",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "fill" }),
         ("bl",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "bl" }),
+
+        // Host I/O — KEY blocks for one byte; ACCEPT reads up to
+        // u bytes into c-addr.  Both ultimately call the rt_*
+        // extern functions through forth.runtime.
+        ("key",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "key" }),
+        ("accept", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "accept" }),
 
         // Pictured numeric output — the ANS DSL for formatting
         // numbers as strings.  All five build incrementally into
@@ -213,6 +257,155 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         // Float memory ops — used by `farray` instances.
         ("f@", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f@" }),
         ("f!", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-f!" }),
+
+        // ANS double-cell ↔ single-cell ↔ float conversions.
+        // S>D / D>S are identity in our unified 64-bit cell model,
+        // but ANS programs name them and we silently elide them.
+        // D>F / F>D bridge to Factor's float type.
+        ("s>d", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "s>d" }),
+        ("d>s", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "d>s" }),
+        ("d>f", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "d>f" }),
+        ("f>d", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f>d" }),
+
+        // ANS float-arithmetic surface.  These are ALIAS:'d to the
+        // integer versions in forth.runtime — Factor's polymorphic
+        // `+` / `-` / `*` / `/` dispatch on the runtime types of
+        // the values on the stack, so the same word handles floats
+        // when the operands are floats.  Exposing them under the
+        // ANS names so user code can write `F+` and have it resolve.
+        ("f+", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f+" }),
+        ("f-", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f-" }),
+        ("f*", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f*" }),
+        ("f/", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "f/" }),
+        // Float comparators use ans-* wrappers like the integer
+        // versions — same boolean convention (-1 / 0).
+        ("f<", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ansf<" }),
+        ("f>", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ansf>" }),
+        ("f=", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ansf=" }),
+
+        // ANS execution token caller.  `EXECUTE` invokes an xt left
+        // on the data stack.  Factor has the same notion (quotations
+        // executed via `call`); ans-execute wraps it with the
+        // expected ANS stack effect annotation.
+        ("execute", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans-execute" }),
+
+        // ── M2.x #39 ANS Core completeness ─────────────────────────
+        // Arithmetic shortcuts.
+        ("1+", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "1+" }),
+        ("1-", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "1-" }),
+        // Factor has `math:2/` (defined as `-1 shift`) but NO `math:2*`
+        // — we wrap it as `ans2*` in forth.runtime to use `1 shift`.
+        ("2*", QualifiedBuiltin  { vocab: "forth.runtime", factor_name: "ans2*" }),
+        ("2/", QualifiedBuiltin  { vocab: "math",          factor_name: "2/" }),
+        // Floored /MOD, */, */MOD — consistent with our MOD semantics.
+        ("/mod",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans/mod" }),
+        ("*/",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans*/" }),
+        ("*/mod", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans*/mod" }),
+
+        // Bit-shifts.  Factor's `shift` is signed-count bidirectional;
+        // ANS LSHIFT / RSHIFT take an unsigned count with direction in
+        // the word name.  Our wrappers in forth.runtime do the routing.
+        ("lshift", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans-lshift" }),
+        ("rshift", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans-rshift" }),
+
+        // Double-stack manipulation.  Factor's `kernel` has 2DUP and
+        // 2DROP with ANS semantics.  But Factor's `2over` has a
+        // DIFFERENT signature `( x y z -- x y z x y )` — it's
+        // `over over` — not ANS `2OVER ( a b c d -- a b c d a b )`.
+        // And Factor's core ships no `2swap` at all.  We wrap our
+        // own using locals.
+        ("2dup",  Builtin            { vocab: "kernel",        factor_name: "2dup" }),
+        ("2drop", Builtin            { vocab: "kernel",        factor_name: "2drop" }),
+        ("2swap", QualifiedBuiltin   { vocab: "forth.runtime", factor_name: "ans2swap" }),
+        ("2over", QualifiedBuiltin   { vocab: "forth.runtime", factor_name: "ans2over" }),
+
+        // More stack ops from Factor's kernel.  `pick` is NOT here —
+        // ANS `pick` takes a count (n PICK duplicates the n+1th item);
+        // Factor's `pick` is hardwired to the 3rd item.  Filed as a
+        // separate impl ticket — needs Factor's `get-datastack` /
+        // index-from-top access.
+        ("-rot",  Builtin { vocab: "kernel", factor_name: "-rot" }),
+
+        // Pair fetch/store — ANS cell-pair access on a single address.
+        ("2@", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans2@" }),
+        ("2!", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans2!" }),
+
+        // Memory clear — ERASE is FILL with 0.
+        ("erase", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans-erase" }),
+
+        // Inequality predicate against zero.  Returns ANS -1/0.
+        ("0<>", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "ans0<>" }),
+
+        // ── M2.x #32 ANS File Access (minimal) ─────────────────────
+        // INCLUDED reads a file at (c-addr u) and evaluates it.
+        // The Forth 2012 test runner uses this to load each .fth
+        // module; everything else in the File Access Word Set is
+        // deferred until needed.
+        ("included", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-included" }),
+
+        // ── M2.x #43 managed strings ($-vocab) ─────────────────────
+        // Backed by Factor's native immutable `string` type — GC'd,
+        // Unicode-aware, no PAD, no counted-string footguns.
+        ("$len",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$len" }),
+        ("$clen",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$clen" }),
+        ("$+",         QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$+" }),
+        ("$upper",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$upper" }),
+        ("$lower",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$lower" }),
+        ("$find",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$find" }),
+        ("$contains?", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$contains?" }),
+        ("$starts?",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$starts?" }),
+        ("$ends?",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$ends?" }),
+        ("$slice",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$slice" }),
+        ("$cmp",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$cmp" }),
+        ("$hash",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$hash" }),
+        ("$.",         QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$." }),
+        ("$.cr",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$.cr" }),
+        ("int>$",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int>$" }),
+        ("$>int",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$>int" }),
+        (">$",         QualifiedBuiltin { vocab: "forth.runtime", factor_name: ">$" }),
+        ("$>addr",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "$>addr" }),
+
+        // ANS EXIT — early return from the current colon definition.
+        // Maps to Factor's continuations:return, which has effect
+        // ( -- * ).  The `*` tells Factor's inferencer the rest of
+        // the branch is unreachable, so e.g.  `dup 0= IF drop exit
+        // THEN  + ` type-checks even though the IF branch doesn't
+        // produce the same net effect as the THEN-fall-through path
+        // — return signals "I never come back" and Factor honours
+        // that.  Requires the enclosing colon body to be wrapped in
+        // `[ ... ] with-return`; see emit.rs for the wrap logic
+        // (only applied when EXIT is actually used, to avoid the
+        // callcc allocation otherwise).
+        ("exit",       QualifiedBuiltin { vocab: "continuations", factor_name: "return" }),
+
+        // ── Graphics (forth.wf64-gfx) ────────────────────────────────
+        //
+        // Surface the iGui pane API to user Forth.  Backed by the
+        // rt_gpane_* FFI exports in wf64::runtime (which queue into
+        // a thread-safe SurfaceCmd batch and PostMessageW to the
+        // GUI thread — Factor never touches Direct2D directly).
+        ("gpane-open",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-open" }),
+        ("gpane-begin",       QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-begin" }),
+        ("gpane-present",     QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-present" }),
+        ("gpane-clear",       QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-clear" }),
+        ("gpane-fill-rect",   QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-fill-rect" }),
+        ("gpane-stroke-rect", QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-stroke-rect" }),
+        ("gpane-line",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-line" }),
+        ("gpane-fill-circle", QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-fill-circle" }),
+        ("gpane-next-event",  QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-next-event" }),
+
+        // Event-kind constants returned by gpane-next-event.
+        // Factor side has them as EV_NONE etc.; ANS-side spelling
+        // is the conventional lowercase-hyphen form.
+        ("ev-none",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_NONE" }),
+        ("ev-key",         QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_KEY" }),
+        ("ev-char",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_CHAR" }),
+        ("ev-mouse",       QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_MOUSE" }),
+        ("ev-focus",       QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_FOCUS" }),
+        ("ev-resize",      QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_RESIZE" }),
+        ("ev-close",       QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_CLOSE" }),
+        ("ev-frame-close", QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_FRAME_CLOSE" }),
+        ("ev-tick",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "EV_TICK" }),
     ];
     entries.iter().map(|(k, v)| (*k, v.clone())).collect()
 }
@@ -233,6 +426,28 @@ pub struct Resolved {
 }
 
 pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
+    let empty = HashMap::new();
+    resolve_with_prior(prog, &empty)
+}
+
+/// Like [`resolve`] but seeded with names defined in PRIOR compilations
+/// within the same interactive session.  When a user types `: foo ... ;`
+/// in one REPL eval and then references `foo` in the next, the second
+/// compile needs to know `foo` is a user word (not undefined).
+///
+/// `prior_user_words` carries names defined in previous compiles.
+/// Lookup combines them with names defined in THIS compile's items.
+/// Redefinition checking only fires WITHIN this compile — redefining
+/// a prior word is allowed (Factor accepts redefinition; ANS Forth
+/// programs commonly do it interactively).
+///
+/// The returned `Resolved.user_words` contains only THIS compile's
+/// new definitions, so the host can merge them into its persistent
+/// dictionary.
+pub fn resolve_with_prior(
+    prog: Program,
+    prior_user_words: &HashMap<String, Span>,
+) -> Result<Resolved, ResolveError> {
     let builtins = builtin_table();
     let mut user_words: HashMap<String, Span> = HashMap::new();
 
@@ -267,24 +482,41 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
         }
     }
 
+    // Build the combined lookup set: prior session-level names
+    // PLUS this compile's new definitions.  Within-compile redef
+    // is rejected above; across-compile redef is allowed and the
+    // new def shadows the old (Factor will warn at load time but
+    // accept it).
+    let mut combined: HashMap<String, Span> = prior_user_words.clone();
+    for (k, v) in &user_words {
+        combined.insert(k.clone(), *v);
+    }
+
     // Pass 2: resolve every WordRef in every body and at top level.
     let mut word_targets: HashMap<Span, Target> = HashMap::new();
     for item in &prog.items {
         match item {
-            Item::Definition(d) => resolve_exprs(&d.body, &builtins, &user_words, &mut word_targets)?,
-            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &user_words, &mut word_targets)?,
-            // Variable, Constant, Create, Collection carry no
-            // expressions to resolve — their bodies are AST-level
-            // data (name + value or buffer size), not user-visible
-            // word references.
-            Item::Variable(_) | Item::Constant(_)
-            | Item::Create(_) | Item::Collection(_) => {}
+            Item::Definition(d) => resolve_exprs(&d.body, &builtins, &combined, &mut word_targets)?,
+            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &combined, &mut word_targets)?,
+            // Computed-value CONSTANT/FCONSTANT bodies contain user-
+            // visible word references (e.g. `3.5e 240e f/ FCONSTANT
+            // mb-dx` references `f/`).  Resolve them too.  Literal-
+            // valued constants have no body to walk.
+            Item::Constant(c) => {
+                if let crate::compiler::ast::ConstValue::Computed(exprs) = &c.value {
+                    resolve_exprs(exprs, &builtins, &combined, &mut word_targets)?;
+                }
+            }
+            // Variable, Create, Collection carry no expressions to
+            // resolve — their bodies are AST-level data, not user-
+            // visible word references.
+            Item::Variable(_) | Item::Create(_) | Item::Collection(_) => {}
             // Templates have a constructor and does_body, both of
             // which may reference builtins.  Walk them so resolve
             // catches typos.
             Item::Template(t) => {
-                resolve_exprs(&t.constructor, &builtins, &user_words, &mut word_targets)?;
-                resolve_exprs(&t.does_body,   &builtins, &user_words, &mut word_targets)?;
+                resolve_exprs(&t.constructor, &builtins, &combined, &mut word_targets)?;
+                resolve_exprs(&t.does_body,   &builtins, &combined, &mut word_targets)?;
             }
             // Template instances inherit the resolved does_body
             // from their source template; no separate resolution.
@@ -292,6 +524,8 @@ pub fn resolve(prog: Program) -> Result<Resolved, ResolveError> {
         }
     }
 
+    // Return only THIS compile's new names — the host merges into
+    // its persistent dictionary.
     Ok(Resolved { program: prog, word_targets, user_words })
 }
 
@@ -346,6 +580,30 @@ fn resolve_exprs(
                     resolve_exprs(d, builtins, user_words, out)?;
                 }
             }
+            Expr::Tick { name, span } => {
+                // ' name pushes the XT of `name`.  Same resolution
+                // rules as a bare WordRef — must resolve to a known
+                // word.  The resolved target is recorded against
+                // this span so emit can render `\ <factor-name>`.
+                let lc = name.to_ascii_lowercase();
+                if user_words.contains_key(&lc) {
+                    out.insert(*span, Target::UserDefined {
+                        factor_name: factor_user_name(&lc),
+                    });
+                } else if let Some(t) = builtins.get(lc.as_str()) {
+                    out.insert(*span, t.clone());
+                } else {
+                    return Err(ResolveError::UnknownWord {
+                        name: name.clone(), at: *span,
+                    });
+                }
+            }
+            Expr::LetForm { .. } => {
+                // LET forms are self-contained — no external word
+                // references (only operators and built-in function
+                // names that the let_lang codegen resolves itself).
+                // No resolver work needed.
+            }
         }
     }
     Ok(())
@@ -361,8 +619,18 @@ fn resolve_exprs(
 /// appearing as user-defined names, this is where the rename
 /// happens.
 pub(crate) fn factor_user_name(ans_lc: &str) -> String {
-    // Trivial pass-through; extend as needed.
-    ans_lc.to_string()
+    // Some ANS-valid identifiers collide with Factor's parser — `->`
+    // is a locals-arrow inside `::` definitions, `?dup`'s issues
+    // we've documented separately, etc.  Mangle the problem cases
+    // to safe alternative spellings so the emitted IR parses.
+    // User source still writes the ANS name; the resolver hands
+    // the mangled name to the emit layer.
+    match ans_lc {
+        "->"      => "nf-arrow".to_string(),
+        "}t"      => "nf-end-test".to_string(),  // }-prefixed names also flaky
+        "t{"      => "nf-begin-test".to_string(),
+        _         => ans_lc.to_string(),
+    }
 }
 
 // (vocabs_needed moved to emit.rs as part of the sema refactor —

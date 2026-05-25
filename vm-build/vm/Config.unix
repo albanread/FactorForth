@@ -1,0 +1,28 @@
+ifneq ($(DEBUG), 0)
+	SITE_CFLAGS += -fomit-frame-pointer
+endif
+
+EXE_SUFFIX :=
+DLL_PREFIX := lib
+DLL_EXTENSION := .a
+SHARED_DLL_EXTENSION := .so
+SHARED_FLAG := -shared
+
+PLAF_DLL_OBJS += $(BUILD_DIR)/os-unix.o
+PLAF_EXE_OBJS += $(BUILD_DIR)/main-unix.o
+PLAF_MASTER_HEADERS += vm/os-unix.hpp vm/atomic-gcc.hpp vm/atomic.hpp
+
+# LINKER = gcc -shared -o
+# LINK_WITH_ENGINE = '-Wl,-rpath,$$ORIGIN' -lfactor
+
+ifeq ($(IS_CLANG), 1)
+	LINKER := $(TOOLCHAIN_PREFIX)$(CXX) $(CXXFLAGS) $(SHARED_FLAG) \
+		-fvisibility=hidden \
+		$(LIBS) -o
+	SITE_COMMON_LINKER_FLAGS += $(CXXFLAGS)
+else
+	LINKER := $(AR) rcs
+	SITE_COMMON_LINKER_FLAGS +=
+endif
+
+LINK_WITH_ENGINE := -Wl,--whole-archive -lfactor -Wl,-no-whole-archive

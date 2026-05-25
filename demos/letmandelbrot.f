@@ -27,7 +27,44 @@
 -1.25e         fconstant mb-y0       \ top edge of imag axis
 
 
-\ ── 2. Escape-time iteration (the heart of the renderer) ──
+\ ── 2. Palette ────────────────────────────────────────────
+\
+\ A 16-step escape-time gradient: deep navy → ice-white →
+\ amber → black.  Pixels that never escape (n == maxiter)
+\ are painted black for the classic "interior is solid".
+
+: mb-colour-palette ( n -- rgb )
+    15 and
+    dup 0 = if drop 0x0D1540 else
+    dup 1 = if drop 0x102B80 else
+    dup 2 = if drop 0x1558C8 else
+    dup 3 = if drop 0x3A8CF5 else
+    dup 4 = if drop 0x7DC8FF else
+    dup 5 = if drop 0xB8EEFF else
+    dup 6 = if drop 0xFFFFFF else
+    dup 7 = if drop 0xFFF4A8 else
+    dup 8 = if drop 0xFFCC57 else
+    dup 9 = if drop 0xFFA000 else
+    dup 10 = if drop 0xFF6800 else
+    dup 11 = if drop 0xE83800 else
+    dup 12 = if drop 0xAA1200 else
+    dup 13 = if drop 0x650000 else
+    dup 14 = if drop 0x280000 else
+        drop 0x080010
+    then then then then then then then then
+    then then then then then then then
+;
+
+: mb-colour ( n -- rgb )
+    dup mb-maxiter = if
+        drop 0x000000
+    else
+        mb-colour-palette
+    then
+;
+
+
+\ ── 3. Escape-time iteration (the heart of the renderer) ──
 \
 \ Given a starting point z0 = (z0x, z0y) and parameter c
 \ (= (cx, cy)) in the complex plane, iterate z = z² + c up to
@@ -99,35 +136,6 @@ variable mb-count                    \ iterations actually run
     repeat
 
     mb-count @ ;
-
-
-\ ── 3. Palette ────────────────────────────────────────────
-\
-\ A 16-step escape-time gradient: deep navy → ice-white →
-\ amber → black.  Pixels that never escape (n == maxiter)
-\ are painted black for the classic "interior is solid".
-
-: mb-colour ( n -- rgb )
-    dup mb-maxiter = if drop 0x000000 exit then
-    15 and case
-        0  of 0x0D1540 endof
-        1  of 0x102B80 endof
-        2  of 0x1558C8 endof
-        3  of 0x3A8CF5 endof
-        4  of 0x7DC8FF endof
-        5  of 0xB8EEFF endof
-        6  of 0xFFFFFF endof
-        7  of 0xFFF4A8 endof
-        8  of 0xFFCC57 endof
-        9  of 0xFFA000 endof
-        10 of 0xFF6800 endof
-        11 of 0xE83800 endof
-        12 of 0xAA1200 endof
-        13 of 0x650000 endof
-        14 of 0x280000 endof
-        15 of 0x080010 endof
-    endcase
-;
 
 
 \ ── 4. Renderer ───────────────────────────────────────────

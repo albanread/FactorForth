@@ -60,9 +60,14 @@ IN: forth.wf64-gfx
 
 LIBRARY: nf-host
 
+! title_addr is declared `void*` so Factor's FFI marshaller
+! auto-pins the byte-array we pass and forwards its data
+! pointer.  Declaring it `longlong` would force us through
+! `alien-address`, which strictly refuses byte-array-backed
+! aliens (vm/alien.cpp:14 `type_error(ALIEN_TYPE, obj)`).
 FUNCTION: longlong rt_gpane_open ( longlong width,
                                    longlong height,
-                                   longlong title_addr,
+                                   void*    title_addr,
                                    longlong title_len )
 
 FUNCTION: longlong rt_gpane_begin ( longlong child_id )
@@ -117,8 +122,17 @@ FUNCTION: longlong rt_gpane_next_event_for ( longlong child_id,
 ! "command-style" calls, swap stack order if needed.
 
 ! gpane-open ( w h c-addr u -- child_id )
+!
+! c-addr is an nf-addr tuple wrapping a byte-array.  Pass its
+! `ba` slot directly — Factor's FFI sees `void*` and auto-pins
+! the byte-array for the call duration, forwarding the data
+! pointer.  Note: this ignores the nf-addr's `off` slot; for
+! string literals from `S"` the offset is always 0, so this
+! works.  If you ever need to pass a slice with non-zero
+! offset, use `<displaced-alien>` and accept the resulting
+! type-check ceremony.
 :: gpane-open ( w h c-addr u -- child_id )
-    w h c-addr nf-addr-raw u
+    w h c-addr ba>> u
     rt_gpane_open ;
 
 : gpane-begin ( child_id -- )

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# build-image.sh — build images/nf-mandelbrot.image from a stock Factor
-# bootstrap image plus the NewFactor vocabs in factor/.
+# build-image.sh — build images/factorforth.image from a stock Factor
+# bootstrap image plus the FactorForth vocabs in factor/.
 #
 # This is a one-shot bootstrap step.  The resulting image is loaded at
 # runtime by newfactor-ui (which uses the patched factor.dll's embedding
@@ -14,7 +14,7 @@
 #   E:/NewFactor/factor/wf64-gfx/*        — forth.wf64-gfx vocab
 #
 # Output:
-#   E:/NewFactor/images/nf-mandelbrot.image
+#   E:/NewFactor/images/factorforth.image
 #
 # Usage:
 #   bash scripts/build-image.sh
@@ -36,7 +36,7 @@ FACTOR_EXE="E:/factor/factor.exe"
 FACTOR_IMG="E:/factor/factor.image"
 NF_ROOT="E:/NewFactor"
 NF_FACTOR_ROOT="$NF_ROOT/factor"
-OUT_IMAGE="$NF_ROOT/images/nf-mandelbrot.image"
+OUT_IMAGE="$NF_ROOT/images/factorforth.image"
 
 if [[ ! -x "$FACTOR_EXE" ]]; then
     echo "error: $FACTOR_EXE not found or not executable" >&2
@@ -61,7 +61,7 @@ USING: vocabs.loader namespaces init ;
 USING: forth.runtime forth.wf64-gfx alien.remote-control ;
 init-remote-control
 [ boot do-startup-hooks init-remote-control ] set-startup-quot
-"E:/NewFactor/images/nf-mandelbrot.image" save-image-and-exit
+"E:/NewFactor/images/factorforth.image" save-image-and-exit
 EOF
 
 echo "Building $OUT_IMAGE ..."

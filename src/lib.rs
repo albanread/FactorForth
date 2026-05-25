@@ -11,8 +11,34 @@
 //!   and the Win32 dependencies.
 //! * Phase 1: `session` module (embedded Factor VM lifecycle).
 //! * Phase 2: `compiler` module (ANS Forth → canonical Factor IR).
-//! * Phase 3+: `runtime` module (host extern "C" callbacks for iGui via wf64).
-
+//! * Phase 3+: `runtime` module (host extern "C" callbacks for iGui via wf64).//!
+//! ## Articles
+//! 
+//! Deep dives into NewFactor's architecture and design variations:
+//! * [The CREATE/DOES> Implementation](docs/articles/create_does.md)
+//! * [Floating Point and the Unified Stack](docs/articles/floating_point.md)
+//! * [Managed Strings and the `$str` Vocab](docs/articles/new_strings.md)
+//! * [Synthesized Stack Effect Inference](docs/articles/effect_inference.md)
+//! * [The LET DSL for Infix Algebra](docs/articles/let_dsl.md)
+//! * [Crash Recovery & Error Translation](docs/articles/crash_recovery.md)
+//! * [Embedding the Factor VM in Rust](docs/articles/embedding_factor.md)
+//!
+//! ## Supported ANS Forth Words
+//! 
+//! The following words are fully implemented and reachable from user code:
+//! 
+//! * **Stack:** `DUP` `DROP` `SWAP` `OVER` `ROT`
+//! * **Arithmetic:** `+` `-` `*` `/` `MOD` `NEGATE` `ABS` `MIN` `MAX`
+//! * **Comparison:** `=` `<>` `<` `>` `0=` `0<` `0>`
+//! * **Logic:** `AND` `OR` `XOR` `INVERT`
+//! * **Memory:** `@` `!` `+!` `C@` `C!` `CELL+` `CELLS` `CHAR+` `CHARS`
+//! * **Definitions:** `:` `;` `VARIABLE` `CONSTANT` `FCONSTANT` `CREATE` `DOES>`
+//! * **Control Flow:** `IF` `ELSE` `THEN` `BEGIN` `UNTIL` `WHILE` `REPEAT` `AGAIN` `DO` `?DO` `LOOP` `+LOOP` `LEAVE` `UNLOOP` `CASE` `OF` `ENDOF` `ENDCASE`
+//! * **I/O:** `.` `CR` `EMIT` `SPACE` `SPACES` `TYPE` `KEY` `ACCEPT`
+//! * **Formatting:** `<#` `#` `#S` `SIGN` `HOLD` `#>`
+//! * **Strings/Buffers:** `S" ..."` `." ..."` `CMOVE` `FILL` `BL`
+//! * **Radix:** `HEX` `DECIMAL` `OCTAL` `BINARY`
+//! * **Float:** `F@` `F!` `FCONSTANT`
 #![doc(html_no_source)]
 
 // Modules added in order as phases land.

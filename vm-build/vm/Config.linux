@@ -1,0 +1,16 @@
+include vm/Config.unix
+PLAF_DLL_OBJS += $(BUILD_DIR)/os-genunix.o $(BUILD_DIR)/os-linux.o $(BUILD_DIR)/mvm-unix.o
+PLAF_MASTER_HEADERS += vm/os-genunix.hpp vm/os-linux.hpp
+LIBS := -ldl -lm -lrt -lpthread -Wl,--export-dynamic
+
+# clang spams warnings if we use -Wl,--no-as-needed with -c
+# -Wl,--no-as-needed is a gcc optimization, not required
+# we want to work with g++ aliased as c++ here, too
+
+ifeq ($(IS_CLANG),0)
+	SITE_CFLAGS += -Wl,--no-as-needed
+endif
+
+FFI_TEST_CFLAGS := -fPIC
+CFLAGS += -fPIC
+CXXFLAGS += -fPIC

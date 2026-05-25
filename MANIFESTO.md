@@ -3,7 +3,7 @@
 > **Mission restatement (2026-05-23).** Two earlier passes drifted toward the wrong implementation. This block is normative; if anything below it reads otherwise, this block wins.
 >
 > 1. **We want Factor's VM. We do not want Factor.**
->    Factor's VM is — uniquely, as far as we know — a JIT that takes a concatenative stack-based front end and lowers it through a register-allocated CFG, including PICs and a generational GC. That engine is what we are reusing. Factor the *language* (its parser, its listener, its `ui.tools`, its image-bundled standard library, its `command-line-startup` → `quit` lifecycle) is **not** the target. It is the upstream noise we strip away.
+>    Factor's VM is — uniquely, as far as we know — a JIT that takes a concatenative stack-based front end and lowers it through a register-allocated CFG, including PICs and a generational GC. That engine is what we are reusing. Factor the *language* (its parser, its listener, its `ui.tools`, its image-bundled standard library, its `command-line-startup` → `quit` lifecycle) is **not** the target.  
 >
 > 2. **The user writes ANS Forth. The user never sees Factor.**
 >    (Revised 2026-05-24, replacing the v1 "Rust emits VM-level objects directly" wording.  The original intent — that the *language* never drifts from ANS Forth into ANS-flavoured Factor — stands.  The implementation mechanism has been clarified.)
@@ -17,11 +17,14 @@
 > 3. **Factor's primitives already cover ~half of ANS Forth.**
 >    The VM exports `primitive_*` symbols for stack moves, integer arithmetic, comparisons, byte-array and string access, the return stack, control transfer, fixnum/bignum/float math. ANS core words are largely a thin renaming layer over those — we wire `DUP` to Factor's `dup` primitive (or its inlined equivalent), `+` to the right specialised arithmetic, etc. We **invent no semantics that the VM already provides**.
 >
-> 4. **We build the minimal VM ourselves.**
->    The redistributed `factor.dll` + 128 MB `factor.image` is not the artefact we ship. It is Factor's full development environment frozen into a binary. We compile a stripped-down VM from `E:\factor-src\` (C++ or Zig flavours both available), with an explicit C embedding API (`vm_create`, `vm_load_image`, `vm_call_quot`, `vm_destroy`), and we feed it a minimal image containing only the kernel + the runtime words our Rust compiler emits against. Target image size: single-digit MB, not 128 MB.
+> 4. **We ship the full Factor VM.**
+>    While initially aiming for a stripped-down minimal VM, we in fact ship the redistributed `factor.dll` + the full 128 MB `factor.image` (compressed down). The VM contains a vast set of resources and libraries for future use. In 2026, 128 MB is a computationally trivial footprint, and preserving the full environment provides immense value and flexibility out of the box.
 >
 > 5. **Tight integration means in-process FFI, not pipes.**
 >    The VM is linked (or `LoadLibrary`'d) into our Rust host. We call its embedding API directly. There is no subprocess; there is no listener; there is no stdin/stdout sentinel protocol. Pipes were a debugging crutch attempting to make the unmodified `factor.com` usable — that path is closed.
+>
+> 6. **We are a compiler, not a translator or micro-computer emulator.**
+>    We are a compiler for ANS Forth that targets Factor as a VM and as a memory model. We are not a source-to-source translator. Furthermore, we explicitly reject the archaic "micro-computer emulator" mentality—treating the system as a raw contiguous byte array reliant on primitive read/write, memory fill, and memory copy mechanics to achieve our results.
 >
 > ### Approaches explicitly ruled out
 >
@@ -93,7 +96,7 @@ Collect locally (everything goes under `E:\NewFactor\docs\upstream\`):
 
 Collect externally (web fetch into `docs/upstream/external/`):
 
-- **Slava Pestov's PhD thesis** — *"Factor: A Dynamic Stack-Based Programming Language"* (2010, Pestov / Ehrenberg / Groff is the published JFP version).  Authoritative source on tree-IR → CFG passes, inline caches, and the GC design.
+- **The Factor architecture paper** — *"Factor: A Dynamic Stack-Based Programming Language"* (2010, Pestov / Ehrenberg / Groff). Authoritative source on tree-IR → CFG passes, inline caches, and the GC design.
 - **The online Factor handbook** at `https://docs.factorcode.org/` — same articles as in-source but rendered, easier to read linearly.
 - **factorcode.org** wiki / blog posts that survive — many design notes by Pestov on inline caching, generational collection, and PIC machinery were posted on his blog before being folded into the handbook.
 

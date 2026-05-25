@@ -46,9 +46,9 @@ use super::ast::{
     TemplateDef, TemplateInstanceDef, VariableDef,
 };
 use super::error::Pos;
-use super::effect::{infer, Effect, EffectError};
+use super::effect::{infer_with_prior, Effect, EffectError};
 use super::error::Span;
-use super::resolve::{resolve, ResolveError, Target};
+use super::resolve::{resolve_with_prior, ResolveError, Target};
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -85,6 +85,10 @@ pub enum EscapeReason {
     UnknownSink,
     /// `.` or another I/O word saw the raw address.
     PrintedAsValue,
+    /// Forced wide by the compile driver because the variable
+    /// is in a REPL context — subsequent evals can reference it
+    /// and we can't see those uses now.  See #52.
+    InteractiveSession,
 }
 
 /// Info we keep about each user-defined word.
@@ -156,34 +160,127 @@ pub struct Sema {
 /// proceed without word mapping); effect errors are collected but
 /// don't stop the build (callers may want to dump partial results).
 pub fn build(program: Program) -> Result<Sema, ResolveError> {
+    let empty_names = HashMap::new();
+    let empty_effects = HashMap::new();
+    build_with_prior(program, &empty_names, &empty_effects)
+}
+
+/// Same as [`build`] but seeded with names AND effect info for
+/// words defined in prior compiles within this interactive
+/// session.  See [`super::resolve::resolve_with_prior`] and
+/// [`super::effect::infer_with_prior`].
+pub fn build_with_prior(
+    program: Program,
+    prior_user_words: &HashMap<String, Span>,
+    prior_effects: &HashMap<String, Effect>,
+) -> Result<Sema, ResolveError> {
+    let empty = BTreeMap::new();
+    build_with_prior_and_templates(program, prior_user_words, prior_effects, &empty)
+}
+
+/// As above, plus templates from prior compiles.  A `template`
+/// defined in eval 1 needs to be visible to eval 2's
+/// `<n> templatename <newname>` triples so they expand to
+/// `Item::TemplateInstance` correctly.
+pub fn build_with_prior_and_templates(
+    program: Program,
+    prior_user_words: &HashMap<String, Span>,
+    prior_effects: &HashMap<String, Effect>,
+    prior_templates: &BTreeMap<String, TemplateDef>,
+) -> Result<Sema, ResolveError> {
     // Template expansion runs BEFORE resolve.  Each `<n>
     // templatename <newname>` triple in TopLevel becomes an
     // Item::TemplateInstance.  resolve then sees a normal
     // program where `<newname>` is a registered user word.
-    let program = expand_templates_pre_resolve(program);
-    let resolved = resolve(program)?;
-    let (inferred, effect_errors) = infer(&resolved);
+    let program = expand_templates_pre_resolve_with_prior(program, prior_templates);
+
+    // ── lower_qdup ───────────────────────────────────────────────
+    // Rewrite `?DUP IF ... THEN` into `DUP IF ... ELSE DROP THEN`
+    // before resolve sees the AST.  `?dup` has no Factor-compilable
+    // body (polymorphic effect), and Factor's strict effect checker
+    // would reject any runtime word with that shape.  The peephole
+    // rewrite produces balanced branches that compile to zero-cost
+    // machine code on the JIT fast path.  See compiler::lower_qdup.
+    let program = super::lower_qdup::lower_program(program);
+
+    // ── lower_recurse ────────────────────────────────────────────
+    // Bind every `RECURSE` reference inside a `:` body to the
+    // enclosing definition's own name.  Resolve then handles it as
+    // an ordinary self-call (pass-1 has already registered the
+    // def's name in user_words).  Definitions that use RECURSE
+    // without a stack-effect annotation get flagged here and
+    // escalated to a sema-level error below.
+    let (program, missing_recurse_effects) = super::lower_recurse::lower_program(program);
+    if let Some(first) = missing_recurse_effects.first() {
+        return Err(ResolveError::RecurseNeedsEffect {
+            word: first.word_name.clone(),
+            at: first.at,
+        });
+    }
+
+    let mut resolved = resolve_with_prior(program, prior_user_words)?;
+
+    // ── lower_exit ───────────────────────────────────────────────
+    // Rewrite ANS EXIT into structured tail-inlining before any
+    // downstream pass sees the bodies.  Two payoffs:
+    //
+    //   * Effect inference (next pass) sees concrete bodies without
+    //     the `( -- * )` shape that EXIT-as-continuations:return
+    //     would otherwise paint over the synth.  Definitions whose
+    //     only "control flow" was an EXIT-shaped early bail-out now
+    //     get a clean `Known` inference and emit a proper
+    //     `( a -- b )` annotation instead of `( ..a -- ..b )`.
+    //
+    //   * Emit can skip the `[ ... ] continuations:with-return`
+    //     wrap entirely (no callcc0 → full `compiler.tree` JIT).
+    //
+    // EXIT inside a loop body is left alone — the with-return
+    // fallback in emit catches it.  See compiler::lower_exit for
+    // the algorithm and its scope of correctness.
+    for item in resolved.program.items.iter_mut() {
+        if let Item::Definition(d) = item {
+            d.body = super::lower_exit::lower_body(&d.body, &resolved.word_targets);
+        }
+    }
+
+    let (inferred, effect_errors) = infer_with_prior(&resolved, prior_effects);
 
     // Lift the resolve UserWord-equivalent (just name + span) into our
     // richer UserWord with declared effect counts.
     let mut user_words: HashMap<String, UserWord> = HashMap::new();
     for item in &resolved.program.items {
-        if let Item::Definition(d) = item {
-            let (di, do_) = match &d.effect {
-                Some(se) => (Some(se.inputs.len() as u32),
-                             Some(se.outputs.len() as u32)),
-                None => (None, None),
-            };
-            user_words.insert(
-                d.name.to_ascii_lowercase(),
-                UserWord {
-                    name: d.name.clone(),
-                    def_span: d.name_span,
-                    declared_inputs:  di,
-                    declared_outputs: do_,
-                },
-            );
-        }
+        let (name, name_span, di, do_) = match item {
+            Item::Definition(d) => {
+                let (di, do_) = match &d.effect {
+                    Some(se) => (Some(se.inputs.len() as u32),
+                                 Some(se.outputs.len() as u32)),
+                    None => (None, None),
+                };
+                (d.name.clone(), d.name_span, di, do_)
+            }
+            // All other kinds of "name introduction" register the
+            // name so cross-compile lookup sees them, but carry no
+            // declared stack-effect info (variables push an addr,
+            // constants push their value, collections take an idx —
+            // each has a known intrinsic effect that doesn't need
+            // a user-declared `( -- )` annotation).
+            Item::Variable(v)          => (v.name.clone(), v.name_span, None, None),
+            Item::Constant(c)          => (c.name.clone(), c.name_span, None, None),
+            Item::Create(cd)           => (cd.name.clone(), cd.name_span, None, None),
+            Item::Collection(cl)       => (cl.name.clone(), cl.name_span, None, None),
+            Item::Template(t)          => (t.name.clone(), t.name_span, None, None),
+            Item::TemplateInstance(ti) => (ti.name.clone(), ti.name_span, None, None),
+            Item::TopLevel { .. }      => continue,
+        };
+        user_words.insert(
+            name.to_ascii_lowercase(),
+            UserWord {
+                name,
+                def_span: name_span,
+                declared_inputs:  di,
+                declared_outputs: do_,
+            },
+        );
     }
 
     // Collect variables, constants, and CREATE'd buffers into
@@ -242,13 +339,23 @@ pub fn build(program: Program) -> Result<Sema, ResolveError> {
 /// items already in place (giving `<newname>` a registered
 /// dictionary entry).
 fn expand_templates_pre_resolve(program: Program) -> Program {
-    // Collect templates from the program first.
-    let templates: BTreeMap<String, TemplateDef> = program.items.iter()
-        .filter_map(|i| match i {
-            Item::Template(t) => Some((t.name.to_ascii_lowercase(), t.clone())),
-            _ => None,
-        })
-        .collect();
+    let empty = BTreeMap::new();
+    expand_templates_pre_resolve_with_prior(program, &empty)
+}
+
+fn expand_templates_pre_resolve_with_prior(
+    program: Program,
+    prior_templates: &BTreeMap<String, TemplateDef>,
+) -> Program {
+    // Collect templates: prior (from earlier evals in this session)
+    // PLUS templates defined in this compile.  This-compile takes
+    // precedence for same-name keys (Factor allows redefinition).
+    let mut templates: BTreeMap<String, TemplateDef> = prior_templates.clone();
+    for i in &program.items {
+        if let Item::Template(t) = i {
+            templates.insert(t.name.to_ascii_lowercase(), t.clone());
+        }
+    }
     if templates.is_empty() { return program; }
 
     let mut new_items: Vec<Item> = Vec::with_capacity(program.items.len());
@@ -377,10 +484,17 @@ fn analyse_call_graph(sema: &mut Sema) {
             Item::TopLevel { exprs, .. } => {
                 walk_body_for_refs(exprs, None, sema);
             }
-            // Variable, Constant, Create, Collection carry no
-            // expressions to walk.
-            Item::Variable(_) | Item::Constant(_)
-            | Item::Create(_) | Item::Collection(_) => {}
+            // Computed CONSTANT/FCONSTANT bodies need walking so
+            // sema picks up word references inside the value
+            // expression (e.g. `3.5e 240e f/ FCONSTANT mb-dx`).
+            Item::Constant(c) => {
+                if let crate::compiler::ast::ConstValue::Computed(exprs) = &c.value {
+                    walk_body_for_refs(exprs, None, sema);
+                }
+            }
+            // Variable, Create, Collection carry no expressions
+            // to walk.
+            Item::Variable(_) | Item::Create(_) | Item::Collection(_) => {}
             // Templates carry constructor + does_body; instances
             // carry their captured does_body.
             Item::Template(t) => {
@@ -438,8 +552,12 @@ pub fn analyse_escape(sema: &mut Sema) {
         match item {
             Item::Definition(d) => walk_block_for_escape(&d.body, &var_names, sema),
             Item::TopLevel { exprs, .. } => walk_block_for_escape(exprs, &var_names, sema),
-            Item::Variable(_) | Item::Constant(_)
-            | Item::Create(_) | Item::Collection(_) => {}
+            Item::Constant(c) => {
+                if let crate::compiler::ast::ConstValue::Computed(exprs) = &c.value {
+                    walk_block_for_escape(exprs, &var_names, sema);
+                }
+            }
+            Item::Variable(_) | Item::Create(_) | Item::Collection(_) => {}
             Item::Template(t) => {
                 walk_block_for_escape(&t.constructor, &var_names, sema);
                 walk_block_for_escape(&t.does_body,   &var_names, sema);
@@ -551,6 +669,23 @@ fn walk_body_for_refs(exprs: &[Expr], caller: Option<&str>, sema: &mut Sema) {
                 if let Some(d) = default {
                     walk_body_for_refs(d, caller, sema);
                 }
+            }
+            Expr::Tick { name, span } => {
+                // ' name pushes the XT — same as referencing the
+                // name's xt, so record it as a use site (it ties
+                // the target word into the call graph).
+                let lc = name.to_ascii_lowercase();
+                sema.use_sites.entry(lc.clone()).or_default().push(*span);
+                if let Some(c) = caller {
+                    sema.call_graph
+                        .entry(c.to_string())
+                        .or_default()
+                        .insert(lc);
+                }
+            }
+            Expr::LetForm { .. } => {
+                // LET forms are self-contained — no external word
+                // refs, no use-sites for the sema graph to record.
             }
         }
     }

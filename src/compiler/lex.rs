@@ -66,6 +66,14 @@ pub enum Tok {
     /// `( ... )` block comment.  Content does NOT include the
     /// surrounding parens.  May span multiple lines.
     BlockComment(String),
+
+    /// `LET ( ... ) -> ( ... ) = ... END` — a captured LET-DSL
+    /// block.  The contained string is the raw block text
+    /// including the `LET` and `END` keywords; the let_lang
+    /// sub-parser parses it independently with its own lexer
+    /// (which understands infix operators, parens-as-grouping,
+    /// `,`, `->`, `=`, identifier and number literals).
+    LetBlock(String),
 }
 
 /// Integer literal base — the prefix the source used.
@@ -96,6 +104,11 @@ pub enum StringKind {
     SQuote,
     /// `C" ... "` — push counted-string address (ANS 6.2.0855).
     CQuote,
+    /// `S$" ... "` — NewFactor managed-string literal (M2.x #43).
+    /// Pushes a Factor `string` handle (immutable, GC-tracked,
+    /// Unicode-aware) — the modern-Forth-application string type
+    /// that sidesteps PAD, counted-strings, and lifetime traps.
+    SDollarQuote,
 }
 
 /// A token plus its source span.
@@ -213,9 +226,10 @@ impl<'src> Lexer<'src> {
             match self.peek() {
                 None => {
                     let kname = match kind {
-                        StringKind::DotQuote => "dot-quote (.\")",
-                        StringKind::SQuote   => "S-quote (S\")",
-                        StringKind::CQuote   => "C-quote (C\")",
+                        StringKind::DotQuote     => "dot-quote (.\")",
+                        StringKind::SQuote       => "S-quote (S\")",
+                        StringKind::CQuote       => "C-quote (C\")",
+                        StringKind::SDollarQuote => "S$-quote (S$\")",
                     };
                     return Err(CompileError::UnterminatedString {
                         kind: kname,
@@ -294,6 +308,23 @@ impl<'src> Lexer<'src> {
             _ => {}
         }
 
+        // ── Three-character parsing-word starter: S$" ──
+        //
+        // Must come BEFORE the two-char S" check so we don't lex
+        // `S$" hello"` as `S` and then a stray `$"`.  This is the
+        // NewFactor-extension managed-string literal (#43).
+        let three = self.peek3();
+        if matches!(three, Some((b'S', b'$', b'"')) | Some((b's', b'$', b'"'))) {
+            self.bump(); self.bump(); self.bump();
+            if self.peek() == Some(b' ') || self.peek() == Some(b'\t') { self.bump(); }
+            let body = self.read_quoted_string(StringKind::SDollarQuote, start)?;
+            let end = self.pos();
+            return Ok(Some(Token {
+                kind: Tok::Str { value: body, kind: StringKind::SDollarQuote },
+                span: Span { start, end },
+            }));
+        }
+
         // ── Two-character parsing-word starters ──
         //
         // `."`, `S"`, `C"` followed by space then string body then `"`.
@@ -333,10 +364,95 @@ impl<'src> Lexer<'src> {
 
         // ── Generic whitespace-delimited token: number or word ──
         let raw = self.read_word_raw();
+
+        // Special case: `LET` opens a sub-language block that's
+        // parsed by `let_lang` with its own lexer.  Capture every
+        // byte up to and including the matching space-delimited
+        // `END`, and emit one Tok::LetBlock token with the whole
+        // text.  The sub-parser handles the infix grammar.
+        if raw.eq_ignore_ascii_case("let") {
+            let block_end_byte = self.find_let_end(self.i, start)?;
+            // Slice the raw source: from where `let` started (its
+            // byte offset is `start.byte_offset`) to past the
+            // matching END.
+            let let_start_byte = start.byte_offset as usize;
+            let text = std::str::from_utf8(&self.src[let_start_byte..block_end_byte])
+                .map_err(|_| CompileError::UnterminatedString {
+                    kind: "LET-block",
+                    opened_at: Span { start, end: self.pos() },
+                })?
+                .to_string();
+            // Advance the cursor past END.  Re-scanning line/col is
+            // expensive; for now just advance byte and accept that
+            // post-LET diagnostics may have stale line/col.  TODO:
+            // walk the captured text counting newlines and update
+            // self.line / self.col here.
+            self.i = block_end_byte;
+            let end = self.pos();
+            return Ok(Some(Token {
+                kind: Tok::LetBlock(text),
+                span: Span { start, end },
+            }));
+        }
+
         let end = self.pos();
         let span = Span { start, end };
         let kind = classify_word_or_number(&raw, span)?;
         Ok(Some(Token { kind, span }))
+    }
+
+    /// Scan forward from byte offset `body_start` for a matching
+    /// space-delimited `END` (case-insensitive) — the terminator of
+    /// a `LET ... END` block.  Returns the byte offset just past
+    /// the `END` (i.e. where the next token starts).  `let_start`
+    /// is the position of the opening `LET` for diagnostics.
+    fn find_let_end(&self, body_start: usize, let_start: Pos)
+        -> Result<usize, CompileError>
+    {
+        // Walk forward token-by-token via a simple whitespace
+        // tokeniser.  We don't strip comments here — the let_lang
+        // parser handles its own comments; we just need to find
+        // the right `END` word.
+        let mut i = body_start;
+        let bytes = self.src;
+        while i < bytes.len() {
+            // Skip whitespace.
+            while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+                i += 1;
+            }
+            if i >= bytes.len() { break; }
+            // Skip a `\` line comment so an "end" inside it
+            // doesn't false-match.
+            if bytes[i] == b'\\'
+                && (i + 1 >= bytes.len()
+                    || (bytes[i + 1] as char).is_whitespace())
+            {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                continue;
+            }
+            // Skip a `( ... )` block comment likewise.
+            if bytes[i] == b'('
+                && (i + 1 < bytes.len()
+                    && (bytes[i + 1] as char).is_whitespace())
+            {
+                while i < bytes.len() && bytes[i] != b')' { i += 1; }
+                if i < bytes.len() { i += 1; }
+                continue;
+            }
+            // Read a word — non-whitespace run.
+            let word_start = i;
+            while i < bytes.len() && !(bytes[i] as char).is_whitespace() {
+                i += 1;
+            }
+            let word = &bytes[word_start..i];
+            if word.eq_ignore_ascii_case(b"end") {
+                return Ok(i);
+            }
+        }
+        Err(CompileError::UnterminatedString {
+            kind: "LET-block",
+            opened_at: Span { start: let_start, end: self.pos() },
+        })
     }
 
     /// Peek two characters as a tuple, or None if not enough left.
@@ -344,6 +460,16 @@ impl<'src> Lexer<'src> {
         let a = *self.src.get(self.i)?;
         let b = *self.src.get(self.i + 1)?;
         Some((a, b))
+    }
+
+    /// Peek three characters as a tuple — used for the `S$"` /
+    /// `s$"` triple-prefix that mustn't be eaten by the 2-char
+    /// `S"` matcher.
+    fn peek3(&self) -> Option<(u8, u8, u8)> {
+        let a = *self.src.get(self.i)?;
+        let b = *self.src.get(self.i + 1)?;
+        let c = *self.src.get(self.i + 2)?;
+        Some((a, b, c))
     }
 
     /// True if the byte at offset `i + n` is whitespace or end-of-input.
@@ -387,11 +513,22 @@ fn classify_word_or_number(raw: &str, span: Span) -> Result<Tok, CompileError> {
     }
 
     // Integer with explicit base prefix.
+    //
+    // `$<hex-digits>` is a hex literal (`$FF` = 255).  But many of
+    // our managed-string words ALSO start with `$` (`$.`, `$+`,
+    // `$len`, etc.).  Only treat as a hex number when the rest
+    // is non-empty AND entirely hex-digit characters; otherwise
+    // fall through to the word arm.  Matches the policy already
+    // in place for `#` (decimal prefix vs `#S`/`#>`/...).
     if let Some(rest) = raw.strip_prefix('$') {
-        return parse_int_with_base(rest, 16, NumBase::Hex, raw, span);
+        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return parse_int_with_base(rest, 16, NumBase::Hex, raw, span);
+        }
     }
     if let Some(rest) = raw.strip_prefix('%') {
-        return parse_int_with_base(rest, 2, NumBase::Binary, raw, span);
+        if !rest.is_empty() && rest.bytes().all(|b| matches!(b, b'0' | b'1')) {
+            return parse_int_with_base(rest, 2, NumBase::Binary, raw, span);
+        }
     }
     if let Some(rest) = raw.strip_prefix('#') {
         // `#<digits>` is an explicit-decimal literal (`#42`).
@@ -642,10 +779,23 @@ mod tests {
     }
 
     #[test]
-    fn malformed_hex_errors() {
-        let err = lex("$gg").unwrap_err();
-        assert!(matches!(err, CompileError::MalformedNumber { .. }),
-                "got: {err:?}");
+    fn dollar_non_hex_is_word_not_error() {
+        // M2.x #43: the `$` prefix is shared between hex literals
+        // (`$FF`) and the managed-string vocab (`$.`, `$+`, `$len`,
+        // etc.).  Anything that's not entirely hex-digit-tail falls
+        // through to the word arm rather than erroring as a
+        // malformed hex number.  Resolution catches unknown words
+        // later if the user really did mean `$gg` to be a number.
+        let toks = lex("$gg").unwrap();
+        assert!(matches!(toks[0].kind, Tok::Word(ref s) if s == "$gg"),
+                "expected Word(\"$gg\"), got {:?}", toks[0].kind);
+    }
+
+    #[test]
+    fn dollar_hex_still_parses() {
+        let toks = lex("$ff").unwrap();
+        assert!(matches!(toks[0].kind, Tok::Int { value: 0xff, .. }),
+                "expected Int 0xff, got {:?}", toks[0].kind);
     }
 
     #[test]

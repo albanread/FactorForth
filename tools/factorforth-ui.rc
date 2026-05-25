@@ -1,0 +1,22 @@
+// Resources embedded into factorforth-ui.exe:
+//   - Application manifest (DPI awareness, common controls v6,
+//     UTF-8 active code page, supportedOS GUIDs).
+//   - Application icon (cursive "ff" on amber, multi-resolution
+//     ICO 16/24/32/48/64/128/256).  Source script:
+//     scratch on E:/factorforth-scratch/make_icon.py.
+//
+// Built by build.rs via the `embed-resource` crate, which invokes
+// the platform RC compiler (rc.exe on MSVC, windres on MinGW).
+
+#include <winuser.h>
+
+// Manifest resource id 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID.
+// Windows looks for this id on the EXE and uses it as the
+// activation manifest at process startup.
+1 RT_MANIFEST "factorforth-ui.exe.manifest"
+
+// Application icon.  Windows Explorer / taskbar pick the FIRST
+// RT_GROUP_ICON encountered with the lowest numeric ID; we use
+// id 1 so it wins over anything wf64 might bring along through
+// the dependency chain.
+1 ICON "factorforth.ico"

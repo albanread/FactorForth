@@ -15,12 +15,19 @@ name = "newfactor"
 path = "src/main.rs"
 
 [[bin]]
-name = "newfactor-ui"
+name = "factorforth-ui"
 path = "src/bin/newfactor_ui.rs"
 
 [[bin]]
 name = "embed-smoke"
 path = "src/bin/embed_smoke.rs"
+
+# One-shot CLI: compresses factorforth.image → factorforth.image.zst for
+# distribution.  Run after a fresh image build, ship the .zst (~30 MB
+# vs 134 MB raw); the runtime inflates it on first start.
+[[bin]]
+name = "compress-image"
+path = "src/bin/compress_image.rs"
 
 # Dependencies ──────────────────────────────────────────────────────────────
 #
@@ -42,6 +49,15 @@ path = "src/bin/embed_smoke.rs"
 wf64       = { path = "../WF64" }
 anyhow     = "1"
 libloading = "0.8"
+# zstd: image-compression for distribution.  The Factor bootstrap image
+# is ~134 MB raw and compresses to ~30 MB at level 19.  Session inflates
+# `factorforth.image.zst` → `factorforth.image` on first run if the raw
+# file is missing.  The crate bundles the C decoder; no runtime dep on
+# a system zstd.
+zstd       = "0.13"
+
+[build-dependencies]
+embed-resource = "3"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"

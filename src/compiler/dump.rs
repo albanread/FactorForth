@@ -73,6 +73,8 @@ fn describe_tok(t: &Tok) -> (&'static str, String) {
             ("Str",    format!("{:?}  (kind={:?})", value, kind)),
         Tok::LineComment(s)     => ("Line\\",   format!("\"{s}\"")),
         Tok::BlockComment(s)    => ("Block(",   format!("\"{s}\"")),
+        Tok::LetBlock(s)        =>
+            ("LET",     format!("{} chars", s.len())),
     }
 }
 
@@ -121,9 +123,11 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
                              v.name, span_str(&v.span));
         }
         Item::Constant(c) => {
-            let val = match c.value {
+            let val = match &c.value {
                 ConstValue::Int(i)   => format!("Int {i}"),
                 ConstValue::Float(f) => format!("Float {f}"),
+                ConstValue::Computed(exprs) =>
+                    format!("Computed ({} exprs)", exprs.len()),
             };
             let _ = writeln!(out, "{indent}Constant `{}` = {val} ({:?}) @ {}",
                              c.name, c.flavour, span_str(&c.span));
@@ -214,14 +218,25 @@ fn write_expr(out: &mut String, e: &Expr, depth: usize) {
                 for be in d { write_expr(out, be, depth + 2); }
             }
         }
+        Expr::Tick { name, span } => {
+            let _ = writeln!(out, "{indent}Tick `{name}` @ {}", span_str(span));
+        }
+        Expr::LetForm { form, span } => {
+            let _ = writeln!(out, "{indent}LetForm @ {}", span_str(span));
+            let _ = writeln!(out, "{indent}  inputs:  {:?}", form.inputs);
+            let _ = writeln!(out, "{indent}  outputs: {:?}", form.outputs);
+            let _ = writeln!(out, "{indent}  {} results, {} where-bindings",
+                             form.results.len(), form.wheres.len());
+        }
     }
 }
 
 fn str_kind_short(k: &StringKind) -> &'static str {
     match k {
-        StringKind::DotQuote => ".\"",
-        StringKind::SQuote   => "S\"",
-        StringKind::CQuote   => "C\"",
+        StringKind::DotQuote     => ".\"",
+        StringKind::SQuote       => "S\"",
+        StringKind::CQuote       => "C\"",
+        StringKind::SDollarQuote => "S$\"",
     }
 }
 
@@ -275,11 +290,12 @@ pub fn dump_sema(s: &Sema) -> String {
             let escape = match s.escape.get(name) {
                 Some(EscapeState::Narrow) => " [narrow]",
                 Some(EscapeState::Wide { reason, .. }) => match reason {
-                    EscapeReason::Duplicated         => " [wide: duplicated]",
+                    EscapeReason::Duplicated          => " [wide: duplicated]",
                     EscapeReason::PassedToUnknownWord => " [wide: passed to unknown word]",
-                    EscapeReason::AddressArithmetic  => " [wide: address arithmetic]",
-                    EscapeReason::UnknownSink        => " [wide: unknown sink]",
-                    EscapeReason::PrintedAsValue     => " [wide: printed]",
+                    EscapeReason::AddressArithmetic   => " [wide: address arithmetic]",
+                    EscapeReason::UnknownSink         => " [wide: unknown sink]",
+                    EscapeReason::PrintedAsValue      => " [wide: printed]",
+                    EscapeReason::InteractiveSession  => " [wide: REPL / compile_in_context]",
                 },
                 Some(EscapeState::Unknown) | None => " [unknown]",
             };
@@ -295,9 +311,11 @@ pub fn dump_sema(s: &Sema) -> String {
         let _ = writeln!(out, "  (none)");
     } else {
         for (_, c) in &s.constants {
-            let val = match c.value {
+            let val = match &c.value {
                 ConstValue::Int(i)   => format!("{i}"),
                 ConstValue::Float(f) => format!("{f}"),
+                ConstValue::Computed(exprs) =>
+                    format!("<computed: {} expr(s)>", exprs.len()),
             };
             let _ = writeln!(out, "  {:<16} = {val:<10} ({:?}) @ {}",
                              c.name, c.flavour, span_str(&c.span));

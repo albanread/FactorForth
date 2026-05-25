@@ -9,7 +9,7 @@
 //! Usage:
 //!   cargo run --bin embed-smoke                    -- defaults to mandelbrot image
 //!   cargo run --bin embed-smoke -- nf-slim-v1.image -- alt image
-//!   cargo run --bin embed-smoke -- nf-mandelbrot.image "USE: forth.runtime 42 forth.runtime:. flush"
+//!   cargo run --bin embed-smoke -- factorforth.image "USE: forth.runtime 42 forth.runtime:. flush"
 //!
 //! WATCHDOG: a Factor infinite loop or runaway compile can hang
 //! `nf_eval_string` indefinitely.  A background thread aborts the
@@ -70,7 +70,7 @@ fn main() {
     let _wd = arm_watchdog("embed-smoke", Duration::from_secs(timeout_s));
 
     let mut args = std::env::args().skip(1);
-    let image_name = args.next().unwrap_or_else(|| "nf-mandelbrot.image".into());
+    let image_name = args.next().unwrap_or_else(|| "factorforth.image".into());
     let expr = args.next().unwrap_or_else(|| "2 3 + . flush".into());
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

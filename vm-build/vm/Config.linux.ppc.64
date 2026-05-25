@@ -1,0 +1,3 @@
+include vm/Config.linux
+PLAF_DLL_OBJS += $(BUILD_DIR)/cpu-ppc.linux.o
+ARCHITECTURE_FLAG := -m64
