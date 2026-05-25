@@ -77,7 +77,7 @@ variable mb-count                    \ iterations actually run
         1 mb-count +!
         -1
     else
-        fdrop fdrop
+        drop drop
         0
     then ;
 
