@@ -39,6 +39,7 @@
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_editor_checker();
     wf64::igui::crash_handler::install();
     // Warm-charcoal wallpaper for FactorForth.  Slightly distinct
     // from WF64's cool navy so running both side-by-side reads
@@ -64,6 +65,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let exit_code = wf64::igui::run(Some(worker))?;
     std::process::exit(exit_code);
+}
+
+#[cfg(windows)]
+fn install_editor_checker() {
+    use newfactor::compiler;
+    use newfactor::compiler::effect::EffectError;
+    use newfactor::compiler::error::Span;
+    use newfactor::compiler::parse::ParseError;
+    use newfactor::compiler::resolve::ResolveError;
+    use wf64::igui::{install_checker, Diagnostic};
+
+    fn diag_from_span(span: Span, message: String) -> Diagnostic {
+        Diagnostic {
+            line: span.start.line as usize,
+            column: span.start.col as usize,
+            message,
+        }
+    }
+
+    fn parse_error_span(err: &ParseError) -> Span {
+        match err {
+            ParseError::ExpectedDefName { at }
+            | ParseError::ExpectedDefiningName { at, .. }
+            | ParseError::ConstantWithoutValue { at, .. }
+            | ParseError::NonLiteralConstantValue { at, .. }
+            | ParseError::StraySemicolon { at }
+            | ParseError::MalformedStackEffect { at, .. }
+            | ParseError::StrayControlWord { at, .. }
+            | ParseError::LetSyntax { at, .. } => *at,
+            ParseError::NestedColon { inner, .. } => *inner,
+            ParseError::UnterminatedDefinition { opened_at } => *opened_at,
+            ParseError::UnterminatedControl { opened_at, .. } => *opened_at,
+        }
+    }
+
+    fn resolve_error_span(err: &ResolveError) -> Span {
+        match err {
+            ResolveError::UnknownWord { at, .. }
+            | ResolveError::RedefinedWord { at, .. }
+            | ResolveError::RecurseNeedsEffect { at, .. } => *at,
+        }
+    }
+
+    fn effect_error_span(err: &EffectError) -> Span {
+        match err {
+            EffectError::Mismatch { at, .. }
+            | EffectError::CaseNeedsDefault { at, .. } => *at,
+        }
+    }
+
+    install_checker(|source| {
+        match compiler::lex(source) {
+            Ok(tokens) => match compiler::parse(&tokens) {
+                Ok(program) => match compiler::build_sema(program) {
+                    Ok(sema) => sema.effect_errors.iter()
+                        .map(|err| diag_from_span(effect_error_span(err), err.to_string()))
+                        .collect(),
+                    Err(err) => vec![diag_from_span(resolve_error_span(&err), err.to_string())],
+                },
+                Err(err) => vec![diag_from_span(parse_error_span(&err), err.to_string())],
+            },
+            Err(err) => vec![diag_from_span(match &err {
+                compiler::CompileError::UnterminatedString { opened_at, .. } => *opened_at,
+                compiler::CompileError::UnterminatedBlockComment { opened_at } => *opened_at,
+                compiler::CompileError::MalformedNumber { at, .. } => *at,
+            }, err.to_string())],
+        }
+    });
 }
 
 // ── Supervisor ────────────────────────────────────────────────────────────

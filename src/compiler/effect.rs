@@ -508,7 +508,7 @@ fn join_branch_effects(then_eff: Effect, else_eff: Effect) -> Option<(u32, u32)>
 
 fn if_else_effect(then_eff: Effect, else_eff: Effect) -> Effect {
     match join_branch_effects(then_eff, else_eff) {
-        Some((inputs, outputs)) => Effect::known(1, 0).then(Effect::known(inputs, outputs)),
+        Some((inputs, outputs)) => Effect::known(inputs, outputs),
         None => Effect::Unknown,
     }
 }
@@ -839,6 +839,16 @@ mod tests {
         // No declared effect → nothing to mismatch against.
         let (_, errs) = infer_str(": who-knows 1 2 3 ;");
         assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn if_else_consumes_one_flag() {
+        let (inf, errs) = infer_str(
+            ": choose ( n flag -- n ) if 10 else 20 then + ;"
+        );
+        assert!(errs.is_empty(), "got: {errs:?}");
+        assert_eq!(inf.body_effects.get("choose"),
+                   Some(&Effect::known(2, 1)));
     }
 
     #[test]
