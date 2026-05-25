@@ -63,6 +63,9 @@ pub enum ParseError {
         opened_at: Span,
         expected: &'static [&'static str],
     },
+    /// The LET sub-parser rejected the block contents.  Carries
+    /// the inner parser's message verbatim.
+    LetSyntax { at: Span, reason: String },
 }
 
 impl std::fmt::Display for ParseError {
@@ -94,6 +97,8 @@ impl std::fmt::Display for ParseError {
                 }
                 Ok(())
             }
+            ParseError::LetSyntax { at, reason } =>
+                write!(f, "LET syntax error at {at}: {reason}"),
         }
     }
 }
@@ -326,20 +331,41 @@ impl<'t> Parser<'t> {
                 Some(kw @ ("constant" | "fconstant")) => {
                     let kw_static: &'static str = if kw == "constant" { "CONSTANT" } else { "FCONSTANT" };
                     let kw_span = t.span;
-                    // The most recent pending expression IS the value.
-                    let value_expr = pending.pop()
-                        .ok_or(ParseError::ConstantWithoutValue { keyword: kw_static, at: kw_span })?;
-                    let value = match &value_expr {
-                        Expr::Lit(Literal::Int   { value, .. }) => ConstValue::Int(*value),
-                        Expr::Lit(Literal::Float { value, .. }) => ConstValue::Float(*value),
-                        _ => return Err(ParseError::NonLiteralConstantValue {
-                            keyword: kw_static, at: value_expr.span(),
-                        }),
+                    if pending.is_empty() {
+                        return Err(ParseError::ConstantWithoutValue {
+                            keyword: kw_static, at: kw_span,
+                        });
+                    }
+                    // Two shapes:
+                    //   (1) `<literal> CONSTANT name`     - literal-only,
+                    //       emitted as a Factor CONSTANT: (compile-time).
+                    //   (2) `<expr> ... [F]CONSTANT name` - one or more
+                    //       expressions, emitted as `: name body ;
+                    //       inline` (Factor's compiler folds pure
+                    //       bodies to the same machine code as the
+                    //       literal form).
+                    //
+                    // We detect the literal shape by checking that the
+                    // ONLY pending expression is a Lit.  Anything else
+                    // (multiple tokens, a Word call, etc.) goes through
+                    // the Computed path.
+                    let value_start = pending.first().unwrap().span().start;
+                    let value = if pending.len() == 1 {
+                        match &pending[0] {
+                            Expr::Lit(Literal::Int   { value, .. }) => Some(ConstValue::Int(*value)),
+                            Expr::Lit(Literal::Float { value, .. }) => Some(ConstValue::Float(*value)),
+                            _ => None,
+                        }
+                    } else { None };
+                    let value = match value {
+                        Some(v) => { pending.clear(); v }
+                        None => {
+                            // Consume the entire pending vec as the
+                            // expression body.
+                            ConstValue::Computed(std::mem::take(&mut pending))
+                        }
                     };
-                    // Now flush any *other* pending expressions as a
-                    // separate TopLevel.  They preceded the constant
-                    // value and were unrelated.
-                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    pending_start = None;
                     self.bump(); // consume `constant` / `fconstant`
                     let name_tok = self.peek().ok_or(
                         ParseError::ExpectedDefiningName { keyword: kw_static, at: kw_span },
@@ -356,7 +382,7 @@ impl<'t> Parser<'t> {
                     } else { ConstFlavour::Cell };
                     items.push(Item::Constant(ConstantDef {
                         name, name_span, value, flavour,
-                        span: Span { start: value_expr.span().start, end: name_span.end },
+                        span: Span { start: value_start, end: name_span.end },
                     }));
                 }
                 _ => {
@@ -489,6 +515,19 @@ impl<'t> Parser<'t> {
                 let v = value.clone(); let k = *kind; self.bump();
                 Ok(Expr::Lit(Literal::Str { value: v, kind: k, span: t_span }))
             }
+            Tok::LetBlock(text) => {
+                // The let_lang parser handles everything inside LET..END.
+                // Errors propagate as ParseError::LetSyntax.
+                let text = text.clone();
+                self.bump();
+                match super::let_lang::parse(&text) {
+                    Ok(form) => Ok(Expr::LetForm { form, span: t_span }),
+                    Err(e) => Err(ParseError::LetSyntax {
+                        at: t_span,
+                        reason: e.message,
+                    }),
+                }
+            }
             Tok::Word(w) => {
                 let lc = w.to_ascii_lowercase();
                 match lc.as_str() {
@@ -497,11 +536,33 @@ impl<'t> Parser<'t> {
                     "do"    => { self.bump(); self.parse_do(t_span, false) }
                     "?do"   => { self.bump(); self.parse_do(t_span, true)  }
                     "case"  => { self.bump(); self.parse_case(t_span) }
+                    // ' (tick) — ANS parsing word: consume next token
+                    // and emit Expr::Tick { name } at runtime pushing
+                    // the target's execution token.  M2.x #33.
+                    "'" => {
+                        self.bump(); // consume the `'`
+                        let name_tok = self.peek().ok_or(
+                            ParseError::ExpectedDefiningName {
+                                keyword: "'", at: t_span,
+                            },
+                        )?;
+                        let (name, end) = match &name_tok.kind {
+                            Tok::Word(w) => (w.clone(), name_tok.span.end),
+                            _ => return Err(ParseError::ExpectedDefiningName {
+                                keyword: "'", at: t_span,
+                            }),
+                        };
+                        self.bump(); // consume the target name
+                        Ok(Expr::Tick {
+                            name,
+                            span: Span { start: t_span.start, end },
+                        })
+                    }
                     // Terminators leaking through to here means they
                     // weren't inside a matching opener.
                     "else" | "then" | "until" | "while" | "repeat"
                     | "again" | "loop" | "+loop"
-                    | "of" | "endof" | "endcase" => {
+                    | "of" | "endof" | "default" | "other" | "endcase" => {
                         Err(ParseError::StrayControlWord {
                             word: lc, at: t_span,
                         })
@@ -597,8 +658,10 @@ impl<'t> Parser<'t> {
     /// Each round either:
     ///   - sees `OF`: the just-parsed expressions are the match expr
     ///     for a new arm; then parse the arm body up to `ENDOF`.
+    ///   - sees `DEFAULT` / `OTHER`: parse an explicit default body
+    ///     up to `ENDCASE`.
     ///   - sees `ENDCASE`: the just-parsed expressions (possibly
-    ///     empty) are the default branch; we're done.
+    ///     empty) are the implicit default branch; we're done.
     ///
     /// Nested CASEs inside an arm body are absorbed by `expr_one`'s
     /// recursive call back into `parse_case`.
@@ -608,7 +671,7 @@ impl<'t> Parser<'t> {
         let end_span;
         loop {
             let (exprs, term) = self.parse_block_until(
-                "case", case_span, &["of", "endcase"],
+                "case", case_span, &["of", "default", "other", "endcase"],
             )?;
             let term_word = match &term.kind {
                 Tok::Word(w) => w.to_ascii_lowercase(),
@@ -626,6 +689,13 @@ impl<'t> Parser<'t> {
                     body,
                     span: Span { start: arm_start.start, end: endof.span.end },
                 });
+            } else if term_word == "default" || term_word == "other" {
+                let (body, endcase) = self.parse_block_until(
+                    &term_word, term.span, &["endcase"],
+                )?;
+                default = Some(body);
+                end_span = endcase.span;
+                break;
             } else {
                 // endcase: exprs is the default (may be empty).
                 if !exprs.is_empty() {
@@ -1006,6 +1076,30 @@ mod tests {
     }
 
     #[test]
+    fn case_with_explicit_default_keyword() {
+        let prog = parse_str(
+            ": c case 1 of .\" one\" endof default .\" other\" endcase ;"
+        ).unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, default, .. } = d.body.last().unwrap() else { panic!() };
+        assert_eq!(arms.len(), 1);
+        let def = default.as_ref().expect("default present");
+        assert_eq!(def.len(), 1);
+    }
+
+    #[test]
+    fn case_with_explicit_other_keyword() {
+        let prog = parse_str(
+            ": c case 1 of .\" one\" endof other .\" other\" endcase ;"
+        ).unwrap();
+        let Item::Definition(d) = &prog.items[0] else { panic!() };
+        let Expr::Case { arms, default, .. } = d.body.last().unwrap() else { panic!() };
+        assert_eq!(arms.len(), 1);
+        let def = default.as_ref().expect("default present");
+        assert_eq!(def.len(), 1);
+    }
+
+    #[test]
     fn case_complex_match_expr() {
         // Match value computed at runtime: `2 *` means "match-against
         // 2 times the previously-pushed value".  ANS allows this.
@@ -1042,6 +1136,12 @@ mod tests {
     fn stray_endof_rejected() {
         let err = parse_str(": foo endof ;").unwrap_err();
         assert!(matches!(err, ParseError::StrayControlWord { ref word, .. } if word == "endof"));
+    }
+
+    #[test]
+    fn stray_default_rejected() {
+        let err = parse_str(": foo default ;").unwrap_err();
+        assert!(matches!(err, ParseError::StrayControlWord { ref word, .. } if word == "default"));
     }
 
     #[test]

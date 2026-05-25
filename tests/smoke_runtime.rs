@@ -1,6 +1,6 @@
 //! tests/smoke_runtime.rs — Phase 1 success criterion.
 //!
-//! Loads `images/nf-mandelbrot.image` via the patched `factor.dll`'s
+//! Loads `images/factorforth.image` via the patched `factor.dll`'s
 //! embedding API and evaluates a few smoke expressions against the
 //! `forth.runtime` vocab.  Validates:
 //!
@@ -14,7 +14,7 @@
 //! libloading, so the smoke runs as part of `cargo test`.
 //!
 //! Test gating: this is ignored by default — the test requires the
-//! patched factor.dll under vm-build/ plus images/nf-mandelbrot.image
+//! patched factor.dll under vm-build/ plus images/factorforth.image
 //! built via scripts/build-image.sh.  Run explicitly with
 //!   `cargo test --test smoke_runtime -- --ignored --nocapture`.
 //!
@@ -149,7 +149,7 @@ fn image_path() -> PathBuf {
     // Override at test time with NF_IMAGE=...image so we can A/B the
     // mandelbrot image vs. the known-good slim image.  Default is the
     // mandelbrot image (the Phase 1 target).
-    let img = std::env::var("NF_IMAGE").unwrap_or_else(|_| "nf-mandelbrot.image".into());
+    let img = std::env::var("NF_IMAGE").unwrap_or_else(|_| "factorforth.image".into());
     PathBuf::from(manifest_dir).join("images").join(img)
 }
 
@@ -204,7 +204,7 @@ unsafe fn with_vm<F: FnOnce(&NfApi, *mut FactorVm)>(body: F) {
 
     let img = image_path();
     assert!(img.exists(),
-            "nf-mandelbrot.image not found at {} — run scripts/build-image.sh first",
+            "factorforth.image not found at {} — run scripts/build-image.sh first",
             img.display());
 
     // Loading the DLL fails if the cwd isn't its dir — Windows looks for
@@ -944,6 +944,26 @@ fn phase26_case_default_fires() {
                          1 of .\" one\" endof \
                          2 of .\" two\" endof \
                          .\" unknown\" \
+                       endcase ; \
+                       99 classify";
+            let out = compile_and_run(api, vm, src);
+            assert!(out.contains("unknown"), "expected 'unknown', got {out:?}");
+        });
+    }
+}
+
+/// Explicit DEFAULT branch syntax should behave the same as the
+/// legacy implicit fallthrough body.
+#[test]
+#[ignore]
+fn phase26_case_explicit_default_fires() {
+    unsafe {
+        with_vm(|api, vm| {
+            let src = ": classify ( n -- ) \
+                       case \
+                         1 of .\" one\" endof \
+                         2 of .\" two\" endof \
+                         default .\" unknown\" \
                        endcase ; \
                        99 classify";
             let out = compile_and_run(api, vm, src);

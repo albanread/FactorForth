@@ -15,13 +15,12 @@
 //!
 //! ## First-cut scope
 //!
-//! Handles **straight-line** bodies (literals, word references, no
-//! control flow) with full rigour.  Bodies containing `IF`, `BEGIN`,
-//! `DO`, `CASE` produce `Effect::Unknown` and the body-vs-declared
-//! check is skipped — the declared effect is trusted for caller
-//! typing.  Adding effect rules for control structures is a clean
-//! follow-up: each one has a known formula in terms of its sub-
-//! body effects.
+//! Handles straight-line bodies with full rigour, plus first-cut
+//! formulas for the structured control forms we lower directly
+//! (`IF`, `BEGIN`, `DO`, `CASE`).  When a structure's branches do
+//! not unify to one concrete shape, inference returns `Unknown` and
+//! the body-vs-declared check is skipped — the declared effect is
+//! trusted for caller typing.
 //!
 //! ## What an effect is
 //!
@@ -121,6 +120,10 @@ pub enum EffectError {
         declared: (u32, u32),
         inferred: (u32, u32),
     },
+    CaseNeedsDefault {
+        name: String,
+        at: Span,
+    },
 }
 
 impl std::fmt::Display for EffectError {
@@ -141,6 +144,12 @@ impl std::fmt::Display for EffectError {
                     )?;
                 }
                 Ok(())
+            }
+            EffectError::CaseNeedsDefault { name, at } => {
+                write!(
+                    f,
+                    "warning: `{name}` at {at}: CASE has no explicit DEFAULT/OTHER branch, and the no-match path leaves a different stack shape than its OF arms"
+                )
             }
         }
     }
@@ -212,6 +221,8 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("cmove", e(3, 0));   // src dst u --
     m.insert("fill",  e(3, 0));   // c-addr u char --
     m.insert("bl",    e(0, 1));   // -- 32
+    m.insert("key",   e(0, 1));   // -- ch
+    m.insert("accept", e(2, 1));  // c-addr u -- u'
 
     // Pictured numeric output (M2.10b)
     m.insert("<#",    e(0, 0));   // --
@@ -246,6 +257,84 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("f@", e(1, 1));
     m.insert("f!", e(2, 0));
 
+    // ── M2.x quick-wins: latent runtime words surfaced ─────────────
+    // Without effects here, our colon-def emit falls back to row-vars
+    // (..a -- ..b) which Factor refuses to inline-compile against
+    // fixed-effect callees like our forth.runtime:>r.  Declared
+    // effects let the synth path produce concrete (N -- M) so Factor
+    // accepts the def.
+    // (?DUP intentionally not surfaced — see resolve.rs comment.)
+    m.insert("depth", e(0, 1));
+
+    // Return-stack: data-stack effects only (the r-stack is invisible
+    // here, by design).
+    m.insert(">r",    e(1, 0));
+    m.insert("r>",    e(0, 1));
+    m.insert("r@",    e(0, 1));
+    m.insert("rdrop", e(0, 0));
+    m.insert("2>r",   e(2, 0));
+    m.insert("2r>",   e(0, 2));
+
+    m.insert("u.",    e(1, 0));
+
+    m.insert("s>d",   e(1, 1));   // identity on 64-bit cells
+    m.insert("d>s",   e(1, 1));
+    m.insert("d>f",   e(1, 1));
+    m.insert("f>d",   e(1, 1));
+
+    m.insert("f+", e(2, 1));
+    m.insert("f-", e(2, 1));
+    m.insert("f*", e(2, 1));
+    m.insert("f/", e(2, 1));
+    m.insert("f<", e(2, 1));
+    m.insert("f>", e(2, 1));
+    m.insert("f=", e(2, 1));
+
+    m.insert("execute", e(1, 0));   // xt --
+
+    // ── M2.x #39 ANS Core completeness ────────────────────────────
+    m.insert("1+",     e(1, 1));
+    m.insert("1-",     e(1, 1));
+    m.insert("2*",     e(1, 1));
+    m.insert("2/",     e(1, 1));
+    m.insert("/mod",   e(2, 2));   // a b -- r q
+    m.insert("*/",     e(3, 1));   // a b c -- d
+    m.insert("*/mod",  e(3, 2));   // a b c -- r q
+    m.insert("lshift", e(2, 1));   // n u -- n'
+    m.insert("rshift", e(2, 1));
+    m.insert("2dup",   e(2, 4));
+    m.insert("2drop",  e(2, 0));
+    m.insert("2swap",  e(4, 4));
+    m.insert("2over",  e(4, 6));
+    m.insert("-rot",   e(3, 3));
+    m.insert("2@",     e(1, 2));   // addr -- x1 x2
+    m.insert("2!",     e(3, 0));   // x1 x2 addr --
+    m.insert("erase",  e(2, 0));   // c-addr u --
+    m.insert("0<>",    e(1, 1));   // n -- flag
+
+    // ── M2.x #43 managed strings ($-vocab) ────────────────────────
+    m.insert("$len",       e(1, 1));   // s -- n
+    m.insert("$clen",      e(1, 1));
+    m.insert("$+",         e(2, 1));   // a b -- c
+    m.insert("$upper",     e(1, 1));
+    m.insert("$lower",     e(1, 1));
+    m.insert("$find",      e(2, 1));   // haystack needle -- index
+    m.insert("$contains?", e(2, 1));
+    m.insert("$starts?",   e(2, 1));
+    m.insert("$ends?",     e(2, 1));
+    m.insert("$slice",     e(3, 1));   // s from len -- s'
+    m.insert("$cmp",       e(2, 1));
+    m.insert("$hash",      e(1, 1));
+    m.insert("$.",         e(1, 0));
+    m.insert("$.cr",       e(1, 0));
+    m.insert("int>$",      e(1, 1));
+    m.insert("$>int",      e(1, 1));
+    m.insert(">$",         e(2, 1));   // c-addr u -- s
+    m.insert("$>addr",     e(1, 2));   // s -- c-addr u
+
+    // ── M2.x #32 ANS File Access (minimal) ────────────────────────
+    m.insert("included",   e(2, 0));   // c-addr u --
+
     m
 }
 
@@ -272,8 +361,26 @@ pub struct Inferred {
 /// mismatches.  No mismatch is a hard error here — the driver
 /// (`compile`) decides whether to fail the compile or warn.
 pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
+    let empty = HashMap::new();
+    infer_with_prior(r, &empty)
+}
+
+/// Like [`infer`] but seeded with effect info for names defined in
+/// prior compiles in this interactive session.  Lets eval 2's body
+/// synth account for words eval 1 defined.  Without this, a word
+/// defined in one eval looks Unknown to subsequent compiles, and
+/// the synth falls back to row-vars — which then doesn't match
+/// the body's concrete effect, and Factor's strict inference
+/// rejects the compile.
+pub fn infer_with_prior(
+    r: &Resolved,
+    prior_effects: &HashMap<String, Effect>,
+) -> (Inferred, Vec<EffectError>) {
     let builtins = builtin_effects();
-    let mut user_effects: HashMap<String, Effect> = HashMap::new();
+    // Start with prior_effects (so refs to previously-defined
+    // words resolve), then layer this compile's declarations on
+    // top (so re-defs supersede).
+    let mut user_effects: HashMap<String, Effect> = prior_effects.clone();
 
     // Seed user_effects with declared effects so straight-line
     // callers can type-check against them, even before bodies are
@@ -354,6 +461,12 @@ pub fn infer(r: &Resolved) -> (Inferred, Vec<EffectError>) {
         let lc = d.name.to_ascii_lowercase();
         body_effects.insert(lc.clone(), body_eff);
         check_definition(d, body_eff, &mut errors);
+        {
+            let env = Env { builtins: &builtins,
+                            user_effects: &user_effects,
+                            resolved: r };
+            collect_case_warnings(&d.body, &env, &d.name, &mut errors);
+        }
         if d.effect.is_none() {
             user_effects.insert(lc, body_eff);
         }
@@ -381,6 +494,88 @@ fn infer_block(exprs: &[Expr], env: &Env) -> Effect {
     acc
 }
 
+fn join_branch_effects(then_eff: Effect, else_eff: Effect) -> Option<(u32, u32)> {
+    match (then_eff, else_eff) {
+        (Effect::Known { inputs: ti, outputs: to },
+         Effect::Known { inputs: ei, outputs: eo })
+            if ti == ei && to == eo =>
+        {
+            Some((ti, to))
+        }
+        _ => None,
+    }
+}
+
+fn if_else_effect(then_eff: Effect, else_eff: Effect) -> Effect {
+    match join_branch_effects(then_eff, else_eff) {
+        Some((inputs, outputs)) => Effect::known(1, 0).then(Effect::known(inputs, outputs)),
+        None => Effect::Unknown,
+    }
+}
+
+fn infer_case_effect(arms: &[super::ast::CaseArm], default: Option<&[Expr]>, env: &Env) -> Effect {
+    if let Some((head, tail)) = arms.split_first() {
+        let cond_eff = Effect::known(1, 2)
+            .then(infer_block(&head.match_expr, env))
+            .then(Effect::known(2, 1));
+        let then_eff = Effect::known(1, 0).then(infer_block(&head.body, env));
+        let else_eff = infer_case_effect(tail, default, env);
+        cond_eff.then(if_else_effect(then_eff, else_eff))
+    } else {
+        let base = match default {
+            Some(d) => infer_block(d, env),
+            None => Effect::known(0, 0),
+        };
+        base.then(Effect::known(1, 0))
+    }
+}
+
+fn case_needs_default_warning(arms: &[super::ast::CaseArm], env: &Env) -> bool {
+    let no_match_eff = Effect::known(1, 0);
+    arms.iter().any(|arm| {
+        let arm_eff = Effect::known(1, 0).then(infer_block(&arm.body, env));
+        matches!(arm_eff, Effect::Known { .. }) && join_branch_effects(arm_eff, no_match_eff).is_none()
+    })
+}
+
+fn collect_case_warnings(exprs: &[Expr], env: &Env, name: &str, errors: &mut Vec<EffectError>) {
+    for e in exprs {
+        match e {
+            Expr::If { then_body, else_body, .. } => {
+                collect_case_warnings(then_body, env, name, errors);
+                if let Some(eb) = else_body {
+                    collect_case_warnings(eb, env, name, errors);
+                }
+            }
+            Expr::BeginUntil { body, .. }
+            | Expr::BeginAgain { body, .. }
+            | Expr::DoLoop { body, .. } => {
+                collect_case_warnings(body, env, name, errors);
+            }
+            Expr::BeginWhileRepeat { pred, body, .. } => {
+                collect_case_warnings(pred, env, name, errors);
+                collect_case_warnings(body, env, name, errors);
+            }
+            Expr::Case { arms, default, span } => {
+                if default.is_none() && case_needs_default_warning(arms, env) {
+                    errors.push(EffectError::CaseNeedsDefault {
+                        name: name.to_string(),
+                        at: *span,
+                    });
+                }
+                for arm in arms {
+                    collect_case_warnings(&arm.match_expr, env, name, errors);
+                    collect_case_warnings(&arm.body, env, name, errors);
+                }
+                if let Some(d) = default {
+                    collect_case_warnings(d, env, name, errors);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
     match e {
         // Every literal pushes one item.  String literals via `."`
@@ -392,9 +587,10 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
         Expr::Lit(Literal::Int   { .. })
         | Expr::Lit(Literal::Float { .. }) => Effect::known(0, 1),
         Expr::Lit(Literal::Str   { kind, .. }) => match kind {
-            super::lex::StringKind::DotQuote => Effect::known(0, 0),
-            super::lex::StringKind::SQuote   => Effect::known(0, 2),
-            super::lex::StringKind::CQuote   => Effect::known(0, 1),
+            super::lex::StringKind::DotQuote     => Effect::known(0, 0),
+            super::lex::StringKind::SQuote       => Effect::known(0, 2),
+            super::lex::StringKind::CQuote       => Effect::known(0, 1),
+            super::lex::StringKind::SDollarQuote => Effect::known(0, 1),
         },
 
         Expr::WordRef { name, span } => {
@@ -442,15 +638,7 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
                     // effects.  After flag consumption, EITHER
                     // branch runs.  Total: ( 1 + i -- o ).
                     let else_eff = infer_block(eb, env);
-                    match (then_eff, else_eff) {
-                        (Effect::Known { inputs: ti, outputs: to },
-                         Effect::Known { inputs: ei, outputs: eo })
-                            if ti == ei && to == eo =>
-                        {
-                            flag.then(Effect::known(ti, to))
-                        }
-                        _ => Effect::Unknown,
-                    }
+                    flag.then(if_else_effect(then_eff, else_eff))
                 }
             }
         }
@@ -519,22 +707,20 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
         }
 
         Expr::Case { arms, default, .. } => {
-            // CASE's effect formula is genuinely subtle because
-            // each arm's `match_expr ... OF` sequence pushes a
-            // value that's consumed by the implicit `dup =` —
-            // tracking that through composition needs more careful
-            // accounting than the linear `then` chain handles.
-            //
-            // Simplest correct rule for now: a CASE with no arms
-            // and no default just drops the dispatch (1 -- 0).
-            // Any other shape yields Unknown.  When the formula
-            // is worked out properly, plug it in here; the
-            // synthesised annotation will become tighter.
-            if arms.is_empty() && default.is_none() {
-                Effect::known(1, 0)
-            } else {
-                Effect::Unknown
-            }
+            infer_case_effect(arms, default.as_deref(), env)
+        }
+
+        Expr::Tick { .. } => {
+            // ' name pushes the XT of `name` — one stack item out,
+            // nothing consumed.  Same as a literal.
+            Effect::known(0, 1)
+        }
+
+        Expr::LetForm { form, .. } => {
+            // LET consumes inputs.len() cells and produces
+            // outputs.len() cells.  Static and known.
+            Effect::known(form.inputs.len() as u32,
+                          form.outputs.len() as u32)
         }
     }
 }
@@ -668,4 +854,74 @@ mod tests {
         assert_eq!(inf.user_effects.get("twice"),
                    Some(&Effect::known(1, 1)));
     }
+
+        #[test]
+        fn case_effect_statement_with_default_is_known() {
+                let (inf, errs) = infer_str(
+                        ": classify \
+                             case \
+                                 1 of .\" one\" endof \
+                                 2 of .\" two\" endof \
+                                 .\" unknown\" \
+                             endcase ;"
+                );
+                assert!(errs.is_empty(), "got: {errs:?}");
+                assert_eq!(inf.body_effects.get("classify"),
+                                     Some(&Effect::known(1, 0)));
+        }
+
+        #[test]
+        fn case_effect_statement_without_default_is_known() {
+                let (inf, errs) = infer_str(
+                        ": maybe \
+                             case \
+                                 1 of .\" one\" endof \
+                             endcase ;"
+                );
+                assert!(errs.is_empty(), "got: {errs:?}");
+                assert_eq!(inf.body_effects.get("maybe"),
+                                     Some(&Effect::known(1, 0)));
+        }
+
+        #[test]
+        fn case_effect_value_with_dispatch_preserving_default_is_known() {
+                let (inf, errs) = infer_str(
+                        ": code \
+                             case \
+                                 1 of 100 endof \
+                                 2 of 200 endof \
+                                 0 swap \
+                             endcase ;"
+                );
+                assert!(errs.is_empty(), "got: {errs:?}");
+                assert_eq!(inf.body_effects.get("code"),
+                                     Some(&Effect::known(1, 1)));
+        }
+
+        #[test]
+        fn case_effect_value_without_total_fallback_is_unknown() {
+                let (inf, errs) = infer_str(
+                        ": code \
+                             case \
+                                 1 of 100 endof \
+                             endcase ;"
+                );
+            assert!(errs.iter().any(|e| matches!(e, EffectError::CaseNeedsDefault { .. })),
+                "expected missing-default warning, got: {errs:?}");
+                assert_eq!(inf.body_effects.get("code"),
+                                     Some(&Effect::Unknown));
+        }
+
+        #[test]
+        fn explicit_default_suppresses_case_warning() {
+            let (_, errs) = infer_str(
+                ": code \
+                     case \
+                     1 of 100 endof \
+                     default 0 swap \
+                     endcase ;"
+            );
+            assert!(!errs.iter().any(|e| matches!(e, EffectError::CaseNeedsDefault { .. })),
+                "unexpected missing-default warning: {errs:?}");
+        }
 }
