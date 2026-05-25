@@ -67,9 +67,19 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     // hidden-symbol backing.  Cheap to add even when no variables
     // are present.
     set.insert("namespaces");
+    // math.functions / math.order / math.constants — needed for LET
+    // codegen (sqrt sin cos pi e min max etc.).  Even when no LET
+    // form is present, `math.order:<` and friends appear via the
+    // boolean-convention wrappers.  All loaded by basis bootstrap.
+    set.insert("math.functions");
+    set.insert("math.order");
+    set.insert("math.constants");
     for t in s.word_targets.values() {
         if let Some(v) = t.vocab() { set.insert(v); }
     }
+    // `continuations` lands in `set` automatically when EXIT is
+    // used — its target's vocab IS "continuations" — so the
+    // `with-return` wrap emit.rs adds for the same case resolves.
     set.into_iter().collect()
 }
 
@@ -117,7 +127,7 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
                 wrote_anything = true;
             }
             Item::Constant(c) => {
-                emit_constant(c, &mut out); out.push('\n');
+                emit_constant(c, r, &mut out); out.push('\n');
                 wrote_anything = true;
             }
             Item::Create(cd) => {
@@ -348,8 +358,15 @@ fn emit_create(cd: &CreateDef, out: &mut String) {
 /// Emit a CONSTANT / FCONSTANT.  Factor's `CONSTANT:` is a parsing
 /// word that captures a single literal token at parse time and
 /// creates a constant word.  Identical semantics to ANS.
-fn emit_constant(c: &ConstantDef, out: &mut String) {
-    match c.value {
+///
+/// Computed values (multi-token expressions like `3.5e 240e f/
+/// FCONSTANT mb-dx`) can't go through CONSTANT: — that parser
+/// only takes one token.  Emit them as `: name ( -- v ) body ;
+/// inline` instead.  Factor's compiler folds pure-arithmetic
+/// inline bodies to the same machine code as the literal form,
+/// so there's no runtime cost.
+fn emit_constant(c: &ConstantDef, r: &Sema, out: &mut String) {
+    match &c.value {
         ConstValue::Int(v) => {
             write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
         }
@@ -361,12 +378,32 @@ fn emit_constant(c: &ConstantDef, out: &mut String) {
                 write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
             }
         }
+        ConstValue::Computed(exprs) => {
+            // Effect annotation: FCONSTANT produces a float, CONSTANT
+            // produces an int.  Factor's strict effect checker doesn't
+            // care about the type (both are one cell), but the named
+            // slot makes the IR readable.
+            let out_name = match c.flavour {
+                ConstFlavour::Float => "f",
+                ConstFlavour::Cell  => "n",
+            };
+            write!(out, ": {} ( -- {} ) ", c.name, out_name).unwrap();
+            emit_exprs(exprs, r, out);
+            write!(out, " ; inline").unwrap();
+        }
     }
     let _ = c.flavour;  // Cell vs Float discriminator already reflected in value
 }
 
 fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
-    write!(out, ": {} ", d.name).unwrap();
+    // Emit the Factor-side mangled name (e.g. `->` → `nf-arrow`)
+    // so collisions with Factor's parser tokens don't break
+    // compilation.  Caller-side references go through the same
+    // mangling in resolve.rs::factor_user_name.
+    let factor_name = super::resolve::factor_user_name(
+        &d.name.to_ascii_lowercase(),
+    );
+    write!(out, ": {} ", factor_name).unwrap();
     // Factor's `:` REQUIRES a stack-effect annotation.  Picking
     // which one to emit follows the principle that synth is
     // authoritative (it's derived from the body, so it's correct
@@ -395,13 +432,31 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
     let emit_synth = |out: &mut String, inputs: u32, outputs: u32| {
         synth_effect_annotation(inputs, outputs, out);
     };
+    // Sanitize a stack-effect name for Factor's parser.  ANS lets
+    // programmers write `...` to mean "any number of items"; Factor
+    // doesn't accept `...` as a literal name token.  Replace with
+    // `dots` (or any plausible identifier) so the IR parses.
+    fn sanitize(name: &str) -> String {
+        if name == "..." || name.contains('.') {
+            // Replace dots with underscores; bare ... becomes "dots".
+            if name == "..." { return "_dots_".to_string(); }
+            return name.replace('.', "_");
+        }
+        name.to_string()
+    }
     let emit_declared = |out: &mut String| {
         let eff = d.effect.as_ref().unwrap();
         out.push('(');
-        for s in &eff.inputs { out.push(' '); out.push_str(s); }
+        for s in &eff.inputs {
+            out.push(' ');
+            out.push_str(&sanitize(s));
+        }
         if eff.inputs.is_empty() { out.push(' '); }
         out.push_str(" --");
-        for s in &eff.outputs { out.push(' '); out.push_str(s); }
+        for s in &eff.outputs {
+            out.push(' ');
+            out.push_str(&sanitize(s));
+        }
         out.push_str(" ) ");
     };
 
@@ -428,9 +483,44 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
             out.push_str("( ..a -- ..b ) ");
         }
     }
-    emit_exprs(&d.body, r, out);
+    // ANS EXIT support.  Two-stage strategy:
+    //
+    //   1. Run `lower_exit::lower_body` to rewrite EXIT into
+    //      structured tail-inlining at the AST level.  For the
+    //      common case — EXIT at the top of a def body, or inside
+    //      an IF / CASE arm whose enclosing scope eventually reaches
+    //      the def body — this produces a pure structured-control-flow
+    //      AST with NO references to `continuations:return`, so the
+    //      emitted Factor IR is free of callcc0 and gets the full
+    //      `compiler.tree` SSA / float-unboxing / inline-cache JIT.
+    //
+    //   2. Any EXIT that survives the transform must be inside a
+    //      loop body (we leave loops opaque — see `lower_exit` for
+    //      why).  For those, we still wrap the whole def in
+    //      `[ ... ] continuations:with-return` as a correctness
+    //      fallback.  The slow path is paid only per-def-that-needs-it,
+    //      and only until the Rec 2 recursive-loop lowering lands.
+    // Sema has already run lower_exit on every `:` body when this
+    // Sema was built, so `d.body` is the lowered form.  Re-running
+    // would be a no-op.  We just check whether EXIT survives (only
+    // possible when it lives inside a loop body, which lower_exit
+    // leaves opaque) — those still need the with-return wrap as
+    // a correctness fallback.
+    if super::lower_exit::body_uses_exit(&d.body, &r.word_targets) {
+        out.push_str("[ ");
+        emit_exprs(&d.body, r, out);
+        out.push_str(" ] continuations:with-return");
+    } else {
+        emit_exprs(&d.body, r, out);
+    }
     out.push_str(" ;");
 }
+
+// NB: EXIT detection used to live here as `body_uses_exit` /
+// `expr_uses_exit`.  Both moved to `compiler::lower_exit` when the
+// tail-inlining transform took over — emit.rs now calls
+// `lower_exit::body_uses_exit` on the *lowered* body to decide
+// whether the with-return fallback wrap is still required.
 
 /// Render `(inputs -- outputs)` with synthetic item names (a, b, c…
 /// for inputs; r0, r1, … for outputs).  The names don't carry
@@ -504,12 +594,11 @@ fn try_emit_narrow_sink(
         }
         "+!" => {
             // ANS `value var +!` ⇒ var := var + value.
-            // Factor `change-global` is ( variable quot -- ), so
-            // we emit `var [ + ] change-global` — variable below,
-            // quot on top.  At runtime change-global pops [+]
-            // (quot), pops var (symbol), reads var, calls [+]
-            // with (value, current), stores result.
-            write!(out, "{var_name} [ + ] change-global").unwrap();
+            // Emitting `{var_name} get-global + {var_name} set-global` avoids 
+            // `change-global`'s strict nominal stack effect `( variable quot -- )`
+            // which confuses Factor's inference in IF branches when the quot consumes 
+            // a value from under the scope.
+            write!(out, "{var_name} get-global + {var_name} set-global").unwrap();
             Some(2)
         }
         _ => None,
@@ -554,6 +643,15 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
                     out.push_str(&factor_escape(value));
                     out.push_str("\" forth.runtime:s-quote-runtime");
                 }
+                StringKind::SDollarQuote => {
+                    // NewFactor managed-string literal (M2.x #43).
+                    // Pushes a single Factor `string` handle — the
+                    // GC-tracked, Unicode-aware, immutable string
+                    // type.  All `$` vocab operates on these.
+                    out.push('"');
+                    out.push_str(&factor_escape(value));
+                    out.push('"');
+                }
                 StringKind::CQuote => {
                     // ANS C" pushes a counted-string c-addr (length
                     // byte at addr, chars from addr+1).  Less
@@ -591,15 +689,32 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
         //                          (infinite — LEAVE/EXIT lands later)
 
         Expr::If { then_body, else_body, .. } => {
-            out.push_str("[ ");
-            emit_exprs(then_body, r, out);
-            out.push_str(" ] ");
+            // ANS booleans are -1 (true) / 0 (false), but Factor's
+            // `kernel:if` treats `0` as truthy (only `f` is false-y).
+            // Bridge: prepend `math:zero?` to convert ANS flag to
+            // Factor's t/f, then SWAP the branches so a `t` from
+            // `zero?` (input was 0 = false) runs the else branch.
+            //
+            //   flag IF then ELSE else THEN
+            //     →  flag math:zero? [ else ] [ then ] kernel:if
+            //
+            //   flag IF then THEN  (no else)
+            //     →  flag math:zero? [ then ] kernel:unless
+            //
+            // `unless` runs the quotation when the input is FALSE-y,
+            // which after `zero?` means "the flag was non-zero" =
+            // ANS true.  Same semantics as IF with empty else.
+            out.push_str("math:zero? ");
             if let Some(eb) = else_body {
                 out.push_str("[ ");
                 emit_exprs(eb, r, out);
-                out.push_str(" ] if");
+                out.push_str(" ] [ ");
+                emit_exprs(then_body, r, out);
+                out.push_str(" ] kernel:if");
             } else {
-                out.push_str("when");
+                out.push_str("[ ");
+                emit_exprs(then_body, r, out);
+                out.push_str(" ] kernel:unless");
             }
         }
         Expr::BeginUntil { body, .. } => {
@@ -695,6 +810,36 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
         // No arms + no default → just `drop` (an ANS-vacuous CASE).
         Expr::Case { arms, default, .. } => {
             emit_case_chain(arms, default.as_deref(), r, out);
+        }
+
+        // ' name pushes the XT as a one-element quotation
+        // `[ name ]` — that's the form `call( -- )` (which our
+        // ans-execute uses) reliably dispatches on.  Factor's
+        // raw word object doesn't go through `call`'s polymorphic
+        // path the way a quotation does.
+        Expr::Tick { span, name } => {
+            let target = r.word_targets.get(span)
+                .map(|t| t.to_factor_token())
+                .unwrap_or_else(|| name.clone());
+            out.push_str("[ ");
+            out.push_str(&target);
+            out.push_str(" ]");
+        }
+
+        // LET form: lower to Factor `[| ... | ... ] call( ... )`
+        // via the let_lang::codegen module.
+        Expr::LetForm { form, .. } => {
+            match super::let_lang::lower_to_factor(form) {
+                Ok(ir) => out.push_str(&ir),
+                Err(e) => {
+                    // Codegen rejected the form post-parse.  Emit a
+                    // visible diagnostic at runtime rather than
+                    // silently producing wrong IR.
+                    let escaped = e.replace('\\', "\\\\").replace('"', "\\\"");
+                    let _ = write!(out,
+                        "\"LET codegen error: {escaped}\" forth.runtime:print-string");
+                }
+            }
         }
     }
 }
