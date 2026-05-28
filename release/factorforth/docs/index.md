@@ -19,6 +19,8 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
   notation means and how the compiler uses it
 - [Classes and methods](classes.md) — CLASS:, SLOT:, GENERIC:,
   METHOD:, polymorphic slots, two setter idioms
+- [CoreProtocols](coreprotocols.md) — the CLOS object model and the
+  standard library design, with diagrams
 - [LET algebra](let-algebra.md) — the infix DSL for math-heavy
   code
 - [Managed strings](managed-strings.md) — the `$-suffix` vocab
