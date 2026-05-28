@@ -338,6 +338,72 @@ fn fold_reduces_with_an_accumulator() {
     assert!(cap.contains("sub=90"), "fold is left-to-right: {cap}");
 }
 
+/// The predicate family — tally / any? / all? — all ride the protocol.
+/// tally counts matches; any? is true if some match; all? is true if
+/// every element matches (vacuously true when empty).
+#[test]
+#[ignore]
+fn predicate_combinators() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;  : big? ( n -- ? ) 3 > ;");
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push
+        4 xs d-push  5 xs d-push  6 xs d-push
+        ." tally=" xs ' even? tally .     \ 3  (2,4,6)
+        ." any="   xs ' even? any? .      \ -1 (some even)
+        ." big="   xs ' big? any? .       \ -1 (4,5,6 > 3)
+        ." allbig=" xs ' big? all? .      \ 0  (1,2,3 fail)
+
+        \ a collection where every element matches
+        new-darray VALUE evens
+        2 evens d-push  4 evens d-push  8 evens d-push
+        ." alleven=" evens ' even? all? . \ -1
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("tally=3"), "tally counts matches: {cap}");
+    assert!(cap.contains("any=-1"), "any? true when some match: {cap}");
+    assert!(cap.contains("big=-1"), "any? big: {cap}");
+    assert!(cap.contains("allbig=0"), "all? false when one fails: {cap}");
+    assert!(cap.contains("alleven=-1"), "all? true when all match: {cap}");
+}
+
+/// `find` returns the first matching element plus a found flag (so 0 is
+/// a valid element, not a sentinel).  `sum`/`product` are the common
+/// folds with their identity baked in.
+#[test]
+#[ignore]
+fn find_and_numeric_reductions() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;");
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push
+        4 xs d-push  5 xs d-push  6 xs d-push
+
+        \ first even is 2, found
+        xs ' even? find  ." found=" swap . .   \ "2 -1"
+
+        \ nothing matches -> 0 and a false flag
+        new-darray VALUE odds
+        1 odds d-push  3 odds d-push  5 odds d-push
+        odds ' even? find  ." none=" swap . .   \ "0 0"
+
+        \ reductions over the same darray
+        ." sum=" xs sum .          \ 21
+        ." prod=" xs product .     \ 720
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("found=2 -1"), "find first match + flag: {cap}");
+    assert!(cap.contains("none=0 0"), "find miss -> 0 and false: {cap}");
+    assert!(cap.contains("sum=21"), "sum reduces with + : {cap}");
+    assert!(cap.contains("prod=720"), "product reduces with * : {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the

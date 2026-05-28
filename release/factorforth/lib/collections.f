@@ -161,3 +161,72 @@ METHOD: new-like ( d:darray -- e )
         fold-acc  i fold-c at  fold-xt call2>  TO fold-acc
     loop
     fold-acc ;
+
+\ ── Search & predicate combinators ────────────────────────────────
+\
+\ The predicate family, all over the protocol.  xt is a predicate
+\ ( x -- ? ).  (These scan every element — no early exit — favouring a
+\ simple, obviously-correct loop over short-circuiting; the result is
+\ the same either way.)
+
+\ `tally ( c xt -- n )` counts the elements that satisfy the predicate.
+\ (Named tally, not count, to leave ANS COUNT's name free.)
+0 VALUE tally-c
+0 VALUE tally-xt
+0 VALUE tally-n
+: tally ( c xt -- n )
+    TO tally-xt  TO tally-c
+    0 TO tally-n
+    tally-c size 0 ?do
+        i tally-c at  tally-xt call1>
+        if  tally-n 1 +  TO tally-n  then
+    loop
+    tally-n ;
+
+\ `any? ( c xt -- ? )` — true iff at least one element satisfies xt.
+\ Expressed over tally: any match means the count is non-zero.
+: any? ( c xt -- ? )  tally 0 > ;
+
+\ `all? ( c xt -- ? )` — true iff every element satisfies xt.  Starts
+\ true and is cleared by the first element that fails (vacuously true
+\ for an empty collection, the standard convention).
+0 VALUE all-c
+0 VALUE all-xt
+0 VALUE all-flag
+: all? ( c xt -- ? )
+    TO all-xt  TO all-c
+    -1 TO all-flag
+    all-c size 0 ?do
+        i all-c at  all-xt call1>
+        0= if  0 TO all-flag  then
+    loop
+    all-flag ;
+
+\ `find ( c xt -- x ? )` — the FIRST element satisfying xt and a found
+\ flag.  When nothing matches, x is 0 and the flag is false.  Two
+\ returns rather than a sentinel, so any value (including 0) is a valid
+\ element without ambiguity.
+0 VALUE find-c
+0 VALUE find-xt
+0 VALUE find-val
+0 VALUE find-found
+: find ( c xt -- x ? )
+    TO find-xt  TO find-c
+    0 TO find-val  0 TO find-found
+    find-c size 0 ?do
+        i find-c at                  \ x
+        dup find-xt call1>           \ x flag
+        if                           \ x   (matched)
+            find-found 0= if         \ keep only the first match
+                TO find-val  -1 TO find-found
+            else drop then
+        else drop then               \ x   (no match) -> drop
+    loop
+    find-val find-found ;
+
+\ ── Numeric reductions (conveniences over fold) ───────────────────
+\
+\ Common folds with their identity element baked in.  Number
+\ collections only — they lean on +/* directly.
+: sum     ( c -- n )  0 ' + fold ;
+: product ( c -- n )  1 ' * fold ;

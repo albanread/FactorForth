@@ -157,12 +157,18 @@ These are written **once**, against `size`/`at`/`new-like`. They work
 on a grid, a darray, and anything you add later. The transform/predicate
 is an **execution token** — get one with `'` (tick): `xs ' . each`.
 
-| word     | stack effect          | the xt it takes        | result                          |
-|----------|-----------------------|------------------------|---------------------------------|
-| `each`   | `( c xt -- )`         | `( x -- )`             | runs xt once per element        |
-| `map`    | `( c xt -- d )`       | `( x -- y )`           | a new collection of c's type    |
-| `filter` | `( c xt -- d )`       | `( x -- ? )`           | a darray of the elements kept   |
-| `fold`   | `( c init xt -- acc )`| `( acc x -- acc )`     | the threaded accumulator        |
+| word      | stack effect          | the xt it takes        | result                          |
+|-----------|-----------------------|------------------------|---------------------------------|
+| `each`    | `( c xt -- )`         | `( x -- )`             | runs xt once per element        |
+| `map`     | `( c xt -- d )`       | `( x -- y )`           | a new collection of c's type    |
+| `filter`  | `( c xt -- d )`       | `( x -- ? )`           | a darray of the elements kept   |
+| `fold`    | `( c init xt -- acc )`| `( acc x -- acc )`     | the threaded accumulator        |
+| `tally`   | `( c xt -- n )`       | `( x -- ? )`           | how many elements match         |
+| `any?`    | `( c xt -- ? )`       | `( x -- ? )`           | true iff some element matches   |
+| `all?`    | `( c xt -- ? )`       | `( x -- ? )`           | true iff every element matches  |
+| `find`    | `( c xt -- x ? )`     | `( x -- ? )`           | first match + a found flag      |
+| `sum`     | `( c -- n )`          | —                      | `0 ' + fold` (numbers)          |
+| `product` | `( c -- n )`          | —                      | `1 ' * fold` (numbers)          |
 
 ### each — run an xt over every element
 
@@ -219,6 +225,46 @@ new-darray VALUE xs
 1 xs d-push  2 xs d-push  3 xs d-push  4 xs d-push
 xs 0   ' + fold .        \ 10   (1+2+3+4)
 xs 100 ' - fold .        \ 90   (left-to-right: ((((100-1)-2)-3)-4))
+```
+
+### tally / any? / all? — the predicate family
+
+These take a predicate `( x -- ? )` and ask a question of the whole
+collection. `tally` counts the matches; `any?` is true if at least one
+matches; `all?` is true if every element matches (and so is vacuously
+true for an empty collection).
+
+```forth
+: even? ( n -- ? ) 2 mod 0= ;
+
+new-darray VALUE xs
+1 xs d-push  2 xs d-push  3 xs d-push
+4 xs d-push  5 xs d-push  6 xs d-push
+xs ' even? tally .       \ 3   (2, 4, 6)
+xs ' even? any? .        \ -1  (some are even)
+xs ' even? all? .        \ 0   (not all are even)
+```
+
+### find — the first match
+
+`find` returns two things: the first element satisfying the predicate,
+and a found flag. The flag is what you branch on — so `0` is a perfectly
+valid element, never confused with "not found".
+
+```forth
+xs ' even? find          \ ( 2 -1 )  — first even is 2, found
+\ stack now holds: element below, flag on top
+if  ." first even: " .  else  drop ." none"  then
+```
+
+### sum / product — numeric reductions
+
+The two folds you reach for most, with their identity element baked in.
+Number collections only.
+
+```forth
+xs sum .                 \ 21   (1+2+3+4+5+6)
+xs product .             \ 720
 ```
 
 ---
