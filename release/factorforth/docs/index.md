@@ -21,6 +21,8 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
   METHOD:, polymorphic slots, two setter idioms
 - [CoreProtocols](coreprotocols.md) — the CLOS object model and the
   standard library design, with diagrams
+- [Collections](collections.md) — the collection protocol reference:
+  grid, darray, and the each/map/filter/fold algorithms
 - [LET algebra](let-algebra.md) — the infix DSL for math-heavy
   code
 - [Managed strings](managed-strings.md) — the `$-suffix` vocab

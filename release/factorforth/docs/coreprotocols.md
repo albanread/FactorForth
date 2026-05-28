@@ -213,4 +213,5 @@ reimplement dispatch — and you write Forth, never Factor.
 
 ---
 
-Back to [Home](index.md) | [Classes and methods](classes.md)
+Back to [Home](index.md) | [Classes and methods](classes.md) |
+[Collections reference](collections.md)
