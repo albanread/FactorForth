@@ -200,6 +200,9 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
                              if r.source.len() > 40 { "…" } else { "" },
                              span_str(&r.span));
         }
+        Item::Needs { path, span } => {
+            let _ = writeln!(out, "{indent}Needs `{path}` @ {}", span_str(span));
+        }
     }
 }
 

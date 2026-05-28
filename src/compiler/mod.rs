@@ -105,6 +105,14 @@ pub struct CompileContext {
     /// redefinition semantics).  A few KB of strings per session —
     /// the cost of retaining source is negligible.
     pub docs: std::collections::HashMap<String, ast::WordDoc>,
+
+    /// Canonical paths of files already pulled in by `NEEDS`, the
+    /// include-once set.  Persisted across evals so a second `NEEDS`
+    /// of the same file — in this or a later eval — expands to nothing
+    /// (its words are already in `user_words` / the Factor image).
+    /// Keyed by `fs::canonicalize` result, falling back to the raw
+    /// path string when the file can't be canonicalized.
+    pub included: std::collections::HashSet<String>,
 }
 
 impl CompileContext {
@@ -171,6 +179,16 @@ pub fn compile_in_context_with_diagnostics(
 ) -> Result<(String, Vec<EffectError>), String> {
     let toks = lex(source).map_err(|e| e.to_string())?;
     let prog = parse(&toks).map_err(|e| e.to_string())?;
+
+    // NEEDS expansion (Rust-driven, compile-time include-once).  Build
+    // this file's own SEE docs first — its spans index `source` — then
+    // splice in any `NEEDS`'d files, once each, folding each included
+    // file's docs against ITS OWN source so SEE shows the right text.
+    // After this, `prog` is one merged module and no `Item::Needs`
+    // remains for the later passes to see.
+    let mut compile_docs = build_docs(&prog.items, source);
+    let prog = expand_needs(prog, ctx, None, &mut compile_docs)?;
+
     let mut sema = sema::build_with_prior_state(
         prog,
         &ctx.user_words,
@@ -209,7 +227,7 @@ pub fn compile_in_context_with_diagnostics(
     // sema.docs with prior-eval docs first so cross-eval `SEE` works
     // and this compile's (newer) definitions overwrite stale ones.
     sema.docs = ctx.docs.clone();
-    for (name, doc) in build_docs(&sema.program.items, source) {
+    for (name, doc) in compile_docs {
         sema.docs.insert(name, doc);
     }
 
@@ -343,4 +361,71 @@ pub fn build_docs(
         });
     }
     out
+}
+
+/// Resolve `NEEDS` directives by splicing the referenced files' parsed
+/// items into `prog`, in place, **once per file** for the session.
+///
+/// This is the Rust-driven include-once: a parsing word the front end
+/// expands at compile time rather than a runtime call.  Composing at
+/// the AST (parse each file, concatenate into one module, lower once)
+/// keeps a single compilation unit — so an included file's definitions
+/// are visible to code that follows the `NEEDS`, which a runtime
+/// `INCLUDED` can't offer.
+///
+/// * `base_dir` — directory the directive's path is relative to.
+///   `None` at the top level (paths resolve against the process CWD,
+///   like `INCLUDED`); for a file pulled in here, its own directory,
+///   so a library's `NEEDS sibling.f` finds the sibling.
+/// * Dedup key is the canonical path (falling back to the joined path
+///   string).  The key is inserted **before** recursing, so an import
+///   cycle terminates instead of looping.
+/// * `docs` accumulates each included file's SEE records, built against
+///   that file's own source; `or_insert` means an outer file's doc for
+///   a name wins over an inner one (newest-defined-wins is applied by
+///   the caller layering this over `ctx.docs`).
+fn expand_needs(
+    prog: ast::Program,
+    ctx: &mut CompileContext,
+    base_dir: Option<&std::path::Path>,
+    docs: &mut std::collections::HashMap<String, ast::WordDoc>,
+) -> Result<ast::Program, String> {
+    let mut out: Vec<ast::Item> = Vec::with_capacity(prog.items.len());
+    for item in prog.items {
+        match item {
+            ast::Item::Needs { path, .. } => {
+                // Resolve the path relative to the including file.
+                let full = match base_dir {
+                    Some(dir) => dir.join(&path),
+                    None => std::path::PathBuf::from(&path),
+                };
+                // Dedup key: canonical path if possible, else the
+                // joined string (so a not-yet-readable path still
+                // dedups consistently and the read error surfaces).
+                let key = std::fs::canonicalize(&full)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| full.to_string_lossy().into_owned());
+                if !ctx.included.insert(key) {
+                    // Already pulled in this session — expand to nothing.
+                    continue;
+                }
+                let contents = std::fs::read_to_string(&full)
+                    .map_err(|e| format!(
+                        "NEEDS: cannot read {}: {e}", full.display()))?;
+                let toks = lex(&contents).map_err(|e| e.to_string())?;
+                let sub = parse(&toks).map_err(|e| e.to_string())?;
+                // SEE docs for the included file, against its own text.
+                for (name, doc) in build_docs(&sub.items, &contents) {
+                    docs.entry(name).or_insert(doc);
+                }
+                // Recurse with this file's directory as the new base so
+                // its own NEEDS resolve relative to it.
+                let child_base = full.parent().map(|p| p.to_path_buf());
+                let sub = expand_needs(sub, ctx, child_base.as_deref(), docs)?;
+                out.extend(sub.items);
+            }
+            other => out.push(other),
+        }
+    }
+    Ok(ast::Program { items: out })
 }

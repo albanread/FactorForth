@@ -383,6 +383,8 @@ pub fn build_with_prior_state(
             // Raw Factor injection: no Forth-visible name.
             Item::RawFactor(_)         => continue,
             Item::TopLevel { .. }      => continue,
+            // NEEDS is expanded away before sema; arm for exhaustiveness.
+            Item::Needs { .. }         => continue,
         };
         user_words.insert(
             name.to_ascii_lowercase(),
@@ -686,7 +688,9 @@ fn analyse_call_graph(sema: &mut Sema) {
                 walk_body_for_refs(&m.body, Some(&lc), sema);
             }
             // Class / Generic / RawFactor have no Forth-side body.
-            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
+            // Needs is expanded away pre-sema (arm for exhaustiveness).
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_)
+            | Item::Needs { .. } => {}
         }
     }
 }
@@ -752,7 +756,8 @@ pub fn analyse_escape(sema: &mut Sema) {
             Item::Method(m) => {
                 walk_block_for_escape(&m.body, &var_names, sema);
             }
-            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_)
+            | Item::Needs { .. } => {}
         }
     }
 }

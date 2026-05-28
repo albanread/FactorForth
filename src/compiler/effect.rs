@@ -501,6 +501,8 @@ pub fn infer_with_prior(
             // Raw Factor injection has no Forth-visible name.
             Item::RawFactor(_) => {}
             Item::TopLevel { .. } => {}
+            // NEEDS is expanded away pre-effect (exhaustiveness only).
+            Item::Needs { .. } => {}
         }
     }
 

@@ -171,10 +171,25 @@ tan ln exp`, names from the inputs list.  See
 
 ## File access
 
-| word              | effect                           |
-|-------------------|----------------------------------|
-| included          | ( c-addr u -- ; load + run file )|
-| s" path" included | shortcut form                    |
+| word              | effect                            |
+|-------------------|-----------------------------------|
+| included          | ( c-addr u -- ; load + run file ) |
+| s" path" included | shortcut form                     |
+| needs path        | load once — no-op if already loaded |
+
+`NEEDS path` is the include-once directive: it reads, compiles, and
+splices in the named file the first time it's seen, and does nothing on
+a repeat. The path is a single blank-delimited token (use `INCLUDED`
+for paths with spaces) and resolves relative to the file doing the
+`NEEDS` — so a library can list its own dependencies at the top:
+
+```forth
+NEEDS lib/core.f          \ pulled in once, however many files ask for it
+```
+
+Unlike `INCLUDED` (a runtime word), `NEEDS` is resolved by the compiler
+*before* the rest of the file: the included definitions are part of the
+same compilation unit, so code after the `NEEDS` can use them directly.
 
 ## Other
 

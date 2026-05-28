@@ -102,7 +102,9 @@ pub fn lower_program(mut prog: Program) -> Program {
                 m.body = lower_seq(&m.body);
             }
             // Class / Generic / RawFactor have no Forth-side body to walk.
-            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
+            // Needs is expanded away pre-lowering (exhaustiveness only).
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_)
+            | Item::Needs { .. } => {}
             Item::TemplateInstance(ti) => {
                 ti.does_body = lower_seq(&ti.does_body);
             }

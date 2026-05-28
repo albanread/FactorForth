@@ -592,6 +592,8 @@ pub fn resolve_with_prior_and_values_and_classes(
             // Raw Factor injection contributes no Forth-visible name.
             Item::RawFactor(_) => {}
             Item::TopLevel { .. } => {}
+            // NEEDS is expanded away pre-resolve (exhaustiveness only).
+            Item::Needs { .. } => {}
         }
     }
 
@@ -648,7 +650,8 @@ pub fn resolve_with_prior_and_values_and_classes(
             // Class / Generic carry no Forth-side body.  Their
             // slot/effect metadata is parsed at AST time and consumed
             // by lower_classes / emit directly.
-            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_)
+            | Item::Needs { .. } => {}
             // Method body resolves like a `:` body — same rules.
             Item::Method(m) => {
                 resolve_exprs(&m.body, &builtins, &combined, &combined_values, &mut word_targets)?;

@@ -108,6 +108,19 @@ pub enum Item {
     /// declarations that have no Forth-side AST equivalent.  Emit
     /// passes through verbatim.
     RawFactor(RawFactorItem),
+
+    /// `NEEDS path` — include-once directive.  Resolved entirely in the
+    /// Rust front end *before* any later pass runs: the expansion pass
+    /// (`compiler::expand_needs`) reads the file, parses it, and splices
+    /// its items into this program at the directive's position — but
+    /// only the first time a given file is seen in the session (dedup
+    /// keyed on the canonical path, held in `CompileContext`).  A
+    /// repeat `NEEDS` of an already-loaded file expands to nothing.
+    ///
+    /// Because expansion happens up front, no downstream pass (resolve,
+    /// effect, emit, …) ever encounters a live `Needs` — their match
+    /// arms exist only for exhaustiveness.
+    Needs { path: String, span: Span },
 }
 
 /// Introspection record for one defined name, consumed by `SEE`.

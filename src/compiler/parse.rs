@@ -218,6 +218,29 @@ impl<'t> Parser<'t> {
                         span: Span { start: kw_span.start, end: name_span.end },
                     }));
                 }
+                Some("needs") => {
+                    // `NEEDS path` — include-once.  The next blank-
+                    // delimited token is the file path (one token, like
+                    // gforth's `require`; use INCLUDED for paths with
+                    // spaces).  Resolved by the expand-needs pass.
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump(); // consume `needs`
+                    let path_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: "NEEDS", at: kw_span },
+                    )?;
+                    let (path, path_span) = match &path_tok.kind {
+                        Tok::Word(w) => (w.clone(), path_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "NEEDS", at: kw_span,
+                        }),
+                    };
+                    self.bump(); // consume the path token
+                    items.push(Item::Needs {
+                        path,
+                        span: Span { start: kw_span.start, end: path_span.end },
+                    });
+                }
                 Some("create") => {
                     flush_pending(&mut items, &mut pending, &mut pending_start);
                     let kw_span = t.span;

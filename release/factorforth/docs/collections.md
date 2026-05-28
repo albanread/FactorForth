@@ -10,11 +10,12 @@ the *what*: every word, its stack effect, and a worked example.
 
 Everything here is ordinary Forth written on the object system. Load
 Layer 0 first — the value-search words (`member?`, `index-of`) build on
-its `equals?`:
+its `equals?`. `NEEDS` pulls a file in once (a repeat is a no-op), so
+it's safe to list every dependency:
 
 ```forth
-INCLUDE lib/core.f
-INCLUDE lib/collections.f
+NEEDS lib/core.f
+NEEDS lib/collections.f
 ```
 
 ---
