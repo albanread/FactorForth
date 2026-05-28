@@ -10,7 +10,7 @@ This works fine for tight embedded code where you control every
 byte.  For everyday use — splitting input, concatenating
 messages, comparing user-typed names — it's a chore.
 
-FactorForth ships a **managed string** vocab (the `$-suffix`
+Factor4th ships a **managed string** vocab (the `$-suffix`
 words) that gives you string values you can pass around like
 numbers.  The runtime handles allocation, length, GC.
 
@@ -120,7 +120,7 @@ For everything else, use managed.
 
 ## Compatibility note
 
-`S$" ... "` is a FactorForth extension.  Stock ANS code that
+`S$" ... "` is a Factor4th extension.  Stock ANS code that
 uses `S" ... "` continues to work — that returns `c-addr u`,
 the raw form.  If you're porting code from another Forth, you
 don't have to migrate to `$`; the raw form remains supported.

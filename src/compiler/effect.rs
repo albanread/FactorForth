@@ -335,6 +335,20 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     // ── M2.x #32 ANS File Access (minimal) ────────────────────────
     m.insert("included",   e(2, 0));   // c-addr u --
 
+    // ── M2.x #60 Type introspection ───────────────────────────────
+    m.insert("typeof",     e(1, 1));   // x -- code
+    m.insert("int?",       e(1, 1));   // x -- f
+    m.insert("float?",     e(1, 1));
+    m.insert("string?",    e(1, 1));
+    m.insert("xt?",        e(1, 1));
+    m.insert("addr?",      e(1, 1));
+    m.insert("int-type",   e(0, 1));   // -- code
+    m.insert("float-type", e(0, 1));
+    m.insert("string-type",e(0, 1));
+    m.insert("xt-type",    e(0, 1));
+    m.insert("addr-type",  e(0, 1));
+    m.insert("other-type", e(0, 1));
+
     m
 }
 
@@ -436,6 +450,36 @@ pub fn infer_with_prior(
                 // case is array-like.)
                 user_effects.insert(ti.name.to_ascii_lowercase(), Effect::known(1, 1));
             }
+            Item::Value(v) => {
+                // VALUE name pushes its current stored value: (0 -- 1).
+                user_effects.insert(v.name.to_ascii_lowercase(), Effect::known(0, 1));
+            }
+            Item::Class(c) => {
+                // Class name itself has no callable effect — register
+                // (0, 0) so a stray reference doesn't poison inference.
+                user_effects.insert(c.name.to_ascii_lowercase(), Effect::known(0, 0));
+                // Constructor `<classname>` and per-slot accessors:
+                // we can't size the constructor here without the
+                // flattened slot list, which lives in Sema (after
+                // compute_class_slots).  Sema seeds those entries
+                // below in build_with_prior_state via
+                // `seed_class_synth_effects`.
+            }
+            Item::Generic(g) => {
+                // Generic word has the declared effect.
+                user_effects.insert(
+                    g.name.to_ascii_lowercase(),
+                    Effect::known(
+                        g.effect.inputs.len() as u32,
+                        g.effect.outputs.len() as u32,
+                    ),
+                );
+            }
+            // Method extends the generic — same name, no separate
+            // user_effects entry needed.
+            Item::Method(_) => {}
+            // Raw Factor injection has no Forth-visible name.
+            Item::RawFactor(_) => {}
             Item::TopLevel { .. } => {}
         }
     }
@@ -506,6 +550,18 @@ fn join_branch_effects(then_eff: Effect, else_eff: Effect) -> Option<(u32, u32)>
     }
 }
 
+/// Effect of running the matching branch of a balanced IF / IF-ELSE.
+///
+/// IMPORTANT: this returns ONLY the branch effect.  The caller is
+/// responsible for consuming the flag (the boolean that selects the
+/// branch).  Two call sites today: `Expr::If` at the line below
+/// `flag.then(if_else_effect(...))`, and `infer_case_effect` which
+/// must compose its own flag-consumption (from the `=` that produced
+/// the flag during arm dispatch) ahead of this call.
+///
+/// Why split it this way: it lets `if_else_effect` be a pure
+/// "branches must agree" check, without the function having to know
+/// where the flag came from in each context.
 fn if_else_effect(then_eff: Effect, else_eff: Effect) -> Effect {
     match join_branch_effects(then_eff, else_eff) {
         Some((inputs, outputs)) => Effect::known(inputs, outputs),
@@ -520,7 +576,12 @@ fn infer_case_effect(arms: &[super::ast::CaseArm], default: Option<&[Expr]>, env
             .then(Effect::known(2, 1));
         let then_eff = Effect::known(1, 0).then(infer_block(&head.body, env));
         let else_eff = infer_case_effect(tail, default, env);
-        cond_eff.then(if_else_effect(then_eff, else_eff))
+        // cond_eff leaves (DISP, flag) on top.  The IF that follows
+        // consumes the flag — make that consumption explicit here so
+        // if_else_effect can stay pure-branches.  Mirrors what the
+        // direct `Expr::If` call site does (`flag.then(if_else_effect(...))`).
+        let flag = Effect::known(1, 0);
+        cond_eff.then(flag).then(if_else_effect(then_eff, else_eff))
     } else {
         let base = match default {
             Some(d) => infer_block(d, env),
@@ -714,6 +775,12 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
             // ' name pushes the XT of `name` — one stack item out,
             // nothing consumed.  Same as a literal.
             Effect::known(0, 1)
+        }
+
+        Expr::To { .. } => {
+            // `TO name` stores top-of-stack into the named VALUE's
+            // backing global — one item consumed, nothing produced.
+            Effect::known(1, 0)
         }
 
         Expr::LetForm { form, .. } => {

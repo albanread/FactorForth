@@ -1,11 +1,11 @@
-# Getting started with FactorForth
+# Getting started with Factor4th
 
 ## Install
 
-There is no installer.  FactorForth is a self-contained folder
+There is no installer.  Factor4th is a self-contained folder
 you can run from anywhere:
 
-1. Unzip the release archive (or use the `release/factorforth/`
+1. Unzip the release archive (or use the `release/factor4th/`
    folder directly).
 2. Double-click `factorforth-ui.exe`.
 
@@ -41,7 +41,7 @@ on top.
 
 ## State persists across lines
 
-FactorForth's REPL behaves like a real Forth listener: values
+Factor4th's REPL behaves like a real Forth listener: values
 you push stick around until you consume them.  This is the
 fundamental Forth REPL rhythm.
 
@@ -92,7 +92,7 @@ The Demos menu loads bundled programs from `demos\`.  Try:
 - `factorial.f` — recursion + iteration
 - `fibonacci.f` — three styles of the same algorithm
 - `stack-tour.f` — guided tour of the data stack
-- `let-algebra.f` — infix math via FactorForth's LET DSL
+- `let-algebra.f` — infix math via Factor4th's LET DSL
 
 ## Documentation while you work
 

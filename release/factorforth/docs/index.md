@@ -1,4 +1,4 @@
-# FactorForth Documentation
+# Factor4th Documentation
 
 ANS Forth on Factor's VM, in a Direct2D IDE.
 
@@ -14,9 +14,11 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
 ## Language
 
 - [Language reference](language-reference.md) — every word
-  FactorForth ships, organised by topic
+  Factor4th ships, organised by topic
 - [Stack effects](stack-effects.md) — what the `( a b -- c )`
   notation means and how the compiler uses it
+- [Classes and methods](classes.md) — CLASS:, SLOT:, GENERIC:,
+  METHOD:, polymorphic slots, two setter idioms
 - [LET algebra](let-algebra.md) — the infix DSL for math-heavy
   code
 - [Managed strings](managed-strings.md) — the `$-suffix` vocab
@@ -36,6 +38,6 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
 
 ## Project
 
-- Source: <https://github.com/yourname/FactorForth> (placeholder)
+- Source: <https://github.com/yourname/Factor4th> (placeholder)
 - Sibling projects: WF64 (64-bit STC Forth), NewCormanLisp,
   NewOpenDylan, NewAudio

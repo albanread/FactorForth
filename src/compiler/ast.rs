@@ -81,6 +81,120 @@ pub enum Item {
     /// the same shape as Collection but the accessor body is the
     /// captured does_body of the source template.
     TemplateInstance(TemplateInstanceDef),
+
+    /// `<expr> VALUE name` — see [`ValueDef`].  Defines a polymorphic
+    /// settable named cell; the slot accepts any Factor value type.
+    Value(ValueDef),
+
+    /// `CLASS: name [EXTENDS parent] SLOT: x SLOT: y ... ;` — defines a
+    /// record class with named slots.  Lowers to a Factor `TUPLE:`
+    /// declaration plus auto-generated constructor (`<name>`) and
+    /// accessor (`name>slot`, `slot>>name`) `:` definitions.
+    Class(ClassDef),
+
+    /// `GENERIC: name ( a -- d )` — declares a generic function with a
+    /// fixed stack-effect signature.  Methods get attached via
+    /// `Item::Method`.  Effect annotation is required (drives dispatch
+    /// arity and stack-effect inference for callers).
+    Generic(GenericDef),
+
+    /// `METHOD: gname ( a:cls -- d ) body ;` — defines a method that
+    /// specialises an existing generic function on the named class.
+    /// Sprint 1 only supports single-dispatch on the first input.
+    Method(MethodDef),
+
+    /// Escape hatch for emitting raw Factor source.  Used by
+    /// `lower_classes` to inject `TUPLE:` / `GENERIC:` / `M:`
+    /// declarations that have no Forth-side AST equivalent.  Emit
+    /// passes through verbatim.
+    RawFactor(RawFactorItem),
+}
+
+/// `CLASS:` declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClassDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Optional `EXTENDS parent` clause.  Single inheritance only in
+    /// sprint 1; Factor TUPLE: supports it directly via `<` syntax.
+    pub extends: Option<String>,
+    pub slots: Vec<SlotDef>,
+    /// Span from `CLASS:` through the closing `;`.
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlotDef {
+    pub name: String,
+    pub name_span: Span,
+}
+
+/// `GENERIC:` declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Required stack effect — drives dispatch arity and effect
+    /// inference for callers.
+    pub effect: StackEffect,
+    pub span: Span,
+}
+
+/// `METHOD:` definition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MethodDef {
+    pub generic_name: String,
+    pub generic_name_span: Span,
+    /// One specialiser per dispatched input.  Sprint 1: at most one
+    /// (single dispatch on the first stack input).  The specialiser
+    /// names a class to dispatch on.
+    pub specializers: Vec<MethodSpecializer>,
+    /// Full declared effect, including non-dispatched inputs and the
+    /// outputs.  Specialiser-bearing inputs appear as `name:class` in
+    /// source; we strip the `:class` part into MethodSpecializer and
+    /// keep the bare names here.
+    pub effect: StackEffect,
+    pub body: Vec<Expr>,
+    pub span: Span,
+    /// Which auxiliary slot this method occupies.  Primary methods
+    /// (the default `METHOD:` keyword) compute the result.  Before
+    /// methods run before primary in most-specific-first order and
+    /// return nothing.  After methods run after primary in
+    /// least-specific-first order and return nothing.  Aux methods
+    /// must agree with the generic's input arity (they observe the
+    /// same arguments) but their declared effect's outputs are
+    /// always empty.
+    pub kind: MethodKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MethodKind {
+    /// `METHOD:` — primary method.  Computes the value.
+    Primary,
+    /// `METHOD-BEFORE:` — runs before the primary dispatch in
+    /// most-specific-first order, return value ignored.
+    Before,
+    /// `METHOD-AFTER:` — runs after the primary dispatch in
+    /// least-specific-first order, return value ignored.
+    After,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MethodSpecializer {
+    /// Parameter position (0 = first input, etc.) — sprint 1 always 0.
+    pub position: u32,
+    /// Parameter name as written by the user (for diagnostics).
+    pub param_name: String,
+    /// Class name the method dispatches on.
+    pub class_name: String,
+    pub at: Span,
+}
+
+/// Raw Factor source injection — see [`Item::RawFactor`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawFactorItem {
+    pub source: String,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -180,6 +294,28 @@ pub struct VariableDef {
     pub name: String,
     pub name_span: Span,
     /// Span from `VARIABLE` keyword through the name token.
+    pub span: Span,
+}
+
+/// `<expr> VALUE name` — a polymorphic single-slot mutable, settable
+/// via `TO name`.  Unlike VARIABLE, VALUE has no address — it's a
+/// named getter/setter pair onto a Factor global.  Since Factor's
+/// `get-global` / `set-global` are tag-polymorphic, the slot can
+/// hold an integer, float, string, quotation, anything Factor
+/// represents on the data stack.  The initial-value expression
+/// runs once at load time; subsequent stores happen at any `TO`
+/// use site.  No escape analysis, no @/!, no narrow/wide split —
+/// that machinery belongs to VARIABLE which has to support address
+/// arithmetic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValueDef {
+    pub name: String,
+    pub name_span: Span,
+    /// Initial-value expression sequence.  Runs once at load time
+    /// to seed the underlying Factor global.  May be any pure
+    /// expression that produces exactly one item.
+    pub initial: Vec<Expr>,
+    /// Span from the first initial-value token through the name.
     pub span: Span,
 }
 
@@ -351,6 +487,12 @@ pub enum Expr {
     /// later dispatch.  Effect: `( -- xt )`.
     Tick { name: String, span: Span },
 
+    /// `TO name` — store the top of stack into the VALUE named
+    /// `name`.  Parsed like `'` (the next blank-delimited token is
+    /// the target).  Emit lowers this to `<storage-symbol> set-global`
+    /// on the VALUE's underlying Factor global.  Effect: `( x -- )`.
+    To { name: String, span: Span },
+
     /// `LET (inputs) -> (outputs) = expr,... [WHERE ...]* END` —
     /// the infix-algebraic sub-language.  Parsed by `let_lang`
     /// at lex time (the lexer captures the whole block as a
@@ -404,6 +546,7 @@ impl Expr {
             Expr::DoLoop           { span, .. } => *span,
             Expr::Case             { span, .. } => *span,
             Expr::Tick             { span, .. } => *span,
+            Expr::To               { span, .. } => *span,
             Expr::LetForm          { span, .. } => *span,
         }
     }

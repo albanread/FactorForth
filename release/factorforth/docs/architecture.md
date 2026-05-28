@@ -1,6 +1,6 @@
 # Architecture
 
-FactorForth is two pieces glued together:
+Factor4th is two pieces glued together:
 
 1. A Rust-written **compiler** that reads ANS Forth source and
    emits Factor source code as its intermediate representation.
@@ -171,7 +171,7 @@ NewFactor/                    (source repo)
 |  +- wf64-gfx/               graphics FFI (gpane-*, ev-*)
 +- vm-build/factor.dll        the patched Factor VM
 +- images/factorforth.image   the bootstrapped image
-+- release/factorforth/       shippable folder (this is what you have)
++- release/factor4th/       shippable folder (this is what you have)
 +- tests/                     ~250 Rust tests
 +- docs/                      developer docs (manifesto, journal)
 ```
@@ -179,7 +179,7 @@ NewFactor/                    (source repo)
 The release folder ships:
 
 ```
-release/factorforth/
+release/factor4th/
 +- factorforth-ui.exe         the IDE
 +- factor.dll                 patched Factor VM
 +- factorforth.image          the image (forth.runtime baked in)

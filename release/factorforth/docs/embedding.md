@@ -1,6 +1,6 @@
 # Embedding Factor
 
-This document is for people who want to know *how* FactorForth
+This document is for people who want to know *how* Factor4th
 uses Factor under the hood.  If you just want to write Forth,
 skip to [getting-started.md](getting-started.md).
 
@@ -8,7 +8,7 @@ skip to [getting-started.md](getting-started.md).
 
 We could have written a Forth interpreter from scratch.  WF64
 does exactly that — assembly-level JIT, hand-written GC, the
-works.  For FactorForth we took a different bet: build the
+works.  For Factor4th we took a different bet: build the
 front-end and reuse a mature VM.
 
 Factor gives us:

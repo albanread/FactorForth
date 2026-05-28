@@ -18,24 +18,80 @@
 //! (Factor's compiler unboxes the floats through the chain),
 //! and pushes `outputs.len()` cells on exit.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::parser::{BinOp, Expr, LetForm};
 
 /// Produce Factor IR text for a LET form.  Returns the
 /// `[| inputs | ... ] call( ... )` block as a string ready to
-/// drop into the surrounding emit.  Errors only on truly
-/// pathological forms — most validation happens at parse time.
-pub fn lower_to_factor(form: &LetForm) -> Result<String, String> {
+/// drop into the surrounding emit.
+///
+/// `class_slots` maps lowercased class name → ordered slot list.
+/// Used to resolve destructure clauses like `a:point as ax ay`:
+/// the 1st alias `ax` is bound from the 1st actual slot `x`, the
+/// 2nd alias from the 2nd actual slot, etc.  Aliases can be any
+/// names the user chooses (avoiding collisions when two
+/// destructured inputs share class slots, e.g. two points both
+/// having `x` and `y`).  Pass an empty map when no destructuring
+/// is expected.
+pub fn lower_to_factor(
+    form: &LetForm,
+    class_slots: &HashMap<String, Vec<String>>,
+) -> Result<String, String> {
     let mut out = String::with_capacity(128);
 
     // Header: `[| in_1 in_2 ... |`
     out.push_str("[| ");
     for inp in &form.inputs {
-        out.push_str(&factor_local(inp));
+        out.push_str(&factor_local(&inp.name));
         out.push(' ');
     }
     out.push_str("| ");
+
+    // Destructure clauses: for each input with `:class as slot...`,
+    // emit `<name-local> <class>><slot> :> <slot-local>` per slot.
+    // These bindings happen BEFORE WHERE and result expressions,
+    // so the rest of the LET body sees the destructured slot
+    // names as regular locals.
+    //
+    // Example: `a:point as ax ay` →
+    //   `nfl-a point>x :> nfl-ax  nfl-a point>y :> nfl-ay`
+    //
+    // The class>slot getter is the same auto-generated accessor
+    // we synthesise for `CLASS:` declarations — `point>x` etc.
+    // No new identifier convention introduced; the class name
+    // and slot names are textual at codegen time, resolve glues
+    // them through the regular accessor-word dictionary.
+    for inp in &form.inputs {
+        if let Some(d) = &inp.destructure {
+            let cls = d.class.to_ascii_lowercase();
+            // Look up the actual slot list for this class.  Slot N
+            // of the class is exposed under the user-chosen alias
+            // at position N of the destructure clause.
+            let actual = class_slots.get(&cls).ok_or_else(|| {
+                format!("class `{}` not found (in destructure of `{}`)",
+                    d.class, inp.name)
+            })?;
+            if d.slots.len() > actual.len() {
+                return Err(format!(
+                    "`{}:{} as ...` lists {} aliases but `{}` has {} slots",
+                    inp.name, d.class, d.slots.len(),
+                    d.class, actual.len(),
+                ));
+            }
+            for (i, alias) in d.slots.iter().enumerate() {
+                let actual_slot = &actual[i];
+                let _ = write!(out,
+                    "{name} {cls}>{actual} :> {alias_local} ",
+                    name = factor_local(&inp.name),
+                    cls = cls,
+                    actual = actual_slot,
+                    alias_local = factor_local(alias),
+                );
+            }
+        }
+    }
 
     // WHERE bindings — emit in source order.  Forward references
     // are NOT supported here (mirrors WF64's parser order); a
@@ -57,10 +113,12 @@ pub fn lower_to_factor(form: &LetForm) -> Result<String, String> {
         out.push(' ');
     }
 
-    // Closer + runtime-checked call effect.
+    // Closer + runtime-checked call effect.  Input count is the
+    // number of top-level LetInput entries, NOT counting
+    // destructured slot names (those are interior locals).
     out.push_str("] call( ");
     for inp in &form.inputs {
-        out.push_str(&factor_local(inp));
+        out.push_str(&factor_local(&inp.name));
         out.push(' ');
     }
     out.push_str("-- ");
@@ -196,7 +254,7 @@ mod tests {
     #[test]
     fn lowers_identity() {
         let f = parse("LET (x) -> (y) = x END").unwrap();
-        let ir = lower_to_factor(&f).unwrap();
+        let ir = lower_to_factor(&f, &std::collections::HashMap::new()).unwrap();
         // Expect a [| nfl-x | ... ] call( nfl-x -- nfl-y ) shape.
         assert!(ir.starts_with("[| nfl-x | "), "got {ir}");
         assert!(ir.contains("nfl-x"));
@@ -206,7 +264,7 @@ mod tests {
     #[test]
     fn lowers_arithmetic() {
         let f = parse("LET (x) -> (y) = x * x + 1 END").unwrap();
-        let ir = lower_to_factor(&f).unwrap();
+        let ir = lower_to_factor(&f, &std::collections::HashMap::new()).unwrap();
         assert!(ir.contains("math:*"));
         assert!(ir.contains("math:+"));
         assert!(ir.contains("1.0"));
@@ -215,7 +273,7 @@ mod tests {
     #[test]
     fn lowers_where_in_order() {
         let f = parse("LET (x) -> (y) = a + 1 WHERE a = x * 2 END").unwrap();
-        let ir = lower_to_factor(&f).unwrap();
+        let ir = lower_to_factor(&f, &std::collections::HashMap::new()).unwrap();
         // The where-binding for `a` must appear BEFORE the result.
         let a_bind = ir.find(":> nfl-a").expect("a binding present");
         let result_use = ir.rfind("nfl-a").expect("a use present");
@@ -225,7 +283,7 @@ mod tests {
     #[test]
     fn lowers_unary_minus() {
         let f = parse("LET (x) -> (y) = -x END").unwrap();
-        let ir = lower_to_factor(&f).unwrap();
+        let ir = lower_to_factor(&f, &std::collections::HashMap::new()).unwrap();
         assert!(ir.contains("math:neg"), "got {ir}");
     }
 }

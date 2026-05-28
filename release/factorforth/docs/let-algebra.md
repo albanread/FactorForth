@@ -5,7 +5,7 @@ free composition, embedded systems where every cycle counts.
 For pure math, it's a chore.  Mapping `b^2 - 4ac` onto
 `b dup * 4 a c * * -` is fine once but tedious every time.
 
-FactorForth's **LET** is a tiny DSL that lets you write the
+Factor4th's **LET** is a tiny DSL that lets you write the
 algebra naturally and have the compiler lower it to stack ops
 for you.
 

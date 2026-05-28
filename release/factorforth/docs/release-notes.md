@@ -2,7 +2,7 @@
 
 ## v0.1.0 — 2026-05-25
 
-First public release of FactorForth.
+First public release of Factor4th.
 
 ### What ships
 
@@ -29,12 +29,12 @@ First public release of FactorForth.
 - Defining words: `:` `;` `CONSTANT` `VARIABLE` `CREATE/ALLOT`
   `CREATE/DOES>`, `' (tick)` + `EXECUTE`.
 - Strings: ANS `c-addr u` form AND the `$-suffix` managed-string
-  vocab (FactorForth extension).
+  vocab (Factor4th extension).
 - Pictured number output: `<# # #S SIGN HOLD #>`.
 - File access: `INCLUDED`.
 - Forth 2012 test-runner: `T{ ... -> ... }T` blocks.
 
-### FactorForth extensions
+### Factor4th extensions
 
 - **LET algebra** — infix math DSL with proper precedence,
   unary minus, trig/log functions.

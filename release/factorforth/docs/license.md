@@ -1,9 +1,9 @@
 # License
 
-FactorForth itself: **BSD-3-Clause**.
+Factor4th itself: **BSD-3-Clause**.
 
 ```
-Copyright (c) 2025-2026, the FactorForth authors.
+Copyright (c) 2025-2026, the Factor4th authors.
 
 Redistribution and use in source and binary forms, with or
 without modification, are permitted provided that the following
@@ -71,7 +71,7 @@ the patch is in our source tree under `vm-build/`.
 ### iGui (Direct2D MDI front-end)
 
 Shared with the WF64 project at `E:\WF64\`.  Same BSD-3-Clause
-terms as FactorForth itself.
+terms as Factor4th itself.
 
 ### DocCrate (the documentation browser)
 
@@ -90,7 +90,7 @@ Source: `E:\DocCrate\` (sibling repo).
 
 ## Trademark
 
-"FactorForth" is just a project name.  Factor is a trademark
-of Slava Pestov / the Factor community; FactorForth uses
+"Factor4th" is just a project name.  Factor is a trademark
+of Slava Pestov / the Factor community; Factor4th uses
 Factor's VM under license but is not affiliated with the
 Factor project.

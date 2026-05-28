@@ -67,6 +67,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::process::exit(exit_code);
 }
 
+/// Shared editor-side snapshot of the live session's `CompileContext`.
+///
+/// The IDE worker is the sole writer: after every successful
+/// `compile_in_context` call (and after a session restart), it
+/// republishes its ctx into the `RwLock`.  The F7 editor checker
+/// reads from this snapshot so the editor sees the same dictionary
+/// the next eval will compile against — words defined in earlier
+/// REPL evals stop showing up as "unknown word" in the editor.
+///
+/// `OnceLock` because the snapshot doesn't exist until the IDE
+/// worker starts (after `main` has called `install_editor_checker`).
+/// The checker treats a missing snapshot as "no prior context" and
+/// falls back to a fresh `build_sema`.
+#[cfg(windows)]
+static EDITOR_SNAPSHOT: std::sync::OnceLock<
+    std::sync::RwLock<newfactor::compiler::CompileContext>
+> = std::sync::OnceLock::new();
+
+/// Publish a fresh snapshot of the IDE worker's compile-context for
+/// the F7 checker to read.  Called from the worker after every
+/// successful compile and at session restart.  Clones the ctx — the
+/// checker doesn't see future mutations until the next publish.
+#[cfg(windows)]
+fn publish_editor_snapshot(ctx: &newfactor::compiler::CompileContext) {
+    let lock = EDITOR_SNAPSHOT.get_or_init(|| {
+        std::sync::RwLock::new(newfactor::compiler::CompileContext::new())
+    });
+    *lock.write().unwrap() = ctx.clone();
+}
+
 #[cfg(windows)]
 fn install_editor_checker() {
     use newfactor::compiler;
@@ -104,7 +134,8 @@ fn install_editor_checker() {
         match err {
             ResolveError::UnknownWord { at, .. }
             | ResolveError::RedefinedWord { at, .. }
-            | ResolveError::RecurseNeedsEffect { at, .. } => *at,
+            | ResolveError::RecurseNeedsEffect { at, .. }
+            | ResolveError::ToNotValue { at, .. } => *at,
         }
     }
 
@@ -116,21 +147,45 @@ fn install_editor_checker() {
     }
 
     install_checker(|source| {
-        match compiler::lex(source) {
+        // Pull a read lock on the current editor snapshot, if any.
+        // The IDE worker writes to this after each successful eval;
+        // before the worker boots, the slot is empty and we fall
+        // back to a context-free check.
+        //
+        // The read guard is held only for the duration of the sema
+        // build, which is fast (microseconds for typical source).
+        // Worker writes contend on this lock briefly per eval — also
+        // negligible.
+        let snapshot = EDITOR_SNAPSHOT.get().map(|l| l.read().unwrap());
+
+        let sema_result = match compiler::lex(source) {
             Ok(tokens) => match compiler::parse(&tokens) {
-                Ok(program) => match compiler::build_sema(program) {
-                    Ok(sema) => sema.effect_errors.iter()
-                        .map(|err| diag_from_span(effect_error_span(err), err.to_string()))
-                        .collect(),
-                    Err(err) => vec![diag_from_span(resolve_error_span(&err), err.to_string())],
-                },
-                Err(err) => vec![diag_from_span(parse_error_span(&err), err.to_string())],
+                Ok(program) => Ok(match &snapshot {
+                    Some(snap) => newfactor::compiler::sema::build_with_prior_state(
+                        program,
+                        &snap.user_words,
+                        &snap.user_effects,
+                        &snap.templates,
+                        &snap.values,
+                        &snap.classes,
+                    ),
+                    None => compiler::build_sema(program),
+                }),
+                Err(err) => Err(diag_from_span(parse_error_span(&err), err.to_string())),
             },
-            Err(err) => vec![diag_from_span(match &err {
+            Err(err) => Err(diag_from_span(match &err {
                 compiler::CompileError::UnterminatedString { opened_at, .. } => *opened_at,
                 compiler::CompileError::UnterminatedBlockComment { opened_at } => *opened_at,
                 compiler::CompileError::MalformedNumber { at, .. } => *at,
-            }, err.to_string())],
+            }, err.to_string())),
+        };
+
+        match sema_result {
+            Ok(Ok(sema)) => sema.effect_errors.iter()
+                .map(|err| diag_from_span(effect_error_span(err), err.to_string()))
+                .collect(),
+            Ok(Err(err)) => vec![diag_from_span(resolve_error_span(&err), err.to_string())],
+            Err(diag) => vec![diag],
         }
     });
 }
@@ -218,6 +273,9 @@ fn run_drain_loop(mut session: newfactor::session::Session) {
     // when a fresh Session is booted (Factor's dictionary resets
     // too, so they must stay in lockstep).
     let mut compile_ctx = newfactor::compiler::CompileContext::new();
+    // Seed the editor snapshot so F7 has something to read even
+    // before the first eval lands.  Subsequent compiles refresh it.
+    publish_editor_snapshot(&compile_ctx);
 
     loop {
         let Some(ev) = channels::next_event(200) else { continue };
@@ -239,6 +297,10 @@ fn run_drain_loop(mut session: newfactor::session::Session) {
                 fconsole::reset_for_restart();
                 drop(session);
                 compile_ctx = newfactor::compiler::CompileContext::new();
+                // Flush the editor snapshot too — the next F7 should
+                // see an empty dictionary, matching the freshly-booted
+                // session's state.
+                publish_editor_snapshot(&compile_ctx);
                 fconsole::append("∿ restart requested — fresh FactorForth session below.");
                 fconsole::append("");
                 match boot_session(false) {
@@ -438,6 +500,9 @@ fn handle_eval(
             return;
         }
     };
+    // Compile succeeded — refresh the F7 editor's snapshot so the
+    // next syntax check sees any names this eval introduced.
+    publish_editor_snapshot(ctx);
     newfactor::session::trace("ide.handle_eval",
         &format!("compiled OK ({} bytes IR); calling session.eval",
             ir.len()));
@@ -475,6 +540,9 @@ fn handle_eval_repl(
             return;
         }
     };
+    // Compile succeeded — refresh the F7 editor's snapshot so the
+    // next syntax check sees any names this eval introduced.
+    publish_editor_snapshot(ctx);
     newfactor::session::trace("ide.handle_eval_repl",
         &format!("compiled OK ({} bytes IR); calling session.eval",
             ir.len()));

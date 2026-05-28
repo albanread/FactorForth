@@ -93,6 +93,16 @@ pub fn lower_program(mut prog: Program) -> Program {
                 t.constructor = lower_seq(&t.constructor);
                 t.does_body   = lower_seq(&t.does_body);
             }
+            Item::Value(v) => {
+                v.initial = lower_seq(&v.initial);
+            }
+            Item::Method(m) => {
+                // Method body flows through the same desugar pipeline
+                // as `:` definition bodies.
+                m.body = lower_seq(&m.body);
+            }
+            // Class / Generic / RawFactor have no Forth-side body to walk.
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
             Item::TemplateInstance(ti) => {
                 ti.does_body = lower_seq(&ti.does_body);
             }

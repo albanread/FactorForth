@@ -385,6 +385,84 @@ impl<'t> Parser<'t> {
                         span: Span { start: value_start, end: name_span.end },
                     }));
                 }
+                Some("class:") => {
+                    // CLASS: name [EXTENDS parent] SLOT: x SLOT: y ... ;
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();  // consume `class:`
+                    let class_def = self.class_definition(kw_span)?;
+                    items.push(Item::Class(class_def));
+                }
+                Some("generic:") => {
+                    // GENERIC: name ( a b -- d )
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();  // consume `generic:`
+                    let gen_def = self.generic_declaration(kw_span)?;
+                    items.push(Item::Generic(gen_def));
+                }
+                Some("method:") => {
+                    // METHOD: gname ( a:class -- d ) body ;
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();  // consume `method:`
+                    let method_def = self.method_definition(
+                        kw_span, "METHOD:", super::ast::MethodKind::Primary)?;
+                    items.push(Item::Method(method_def));
+                }
+                Some("method-before:") => {
+                    // METHOD-BEFORE: gname ( a:class -- ) body ;
+                    // Runs before primary dispatch, return value ignored.
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();
+                    let method_def = self.method_definition(
+                        kw_span, "METHOD-BEFORE:", super::ast::MethodKind::Before)?;
+                    items.push(Item::Method(method_def));
+                }
+                Some("method-after:") => {
+                    // METHOD-AFTER: gname ( a:class -- ) body ;
+                    // Runs after primary dispatch, return value ignored.
+                    flush_pending(&mut items, &mut pending, &mut pending_start);
+                    let kw_span = t.span;
+                    self.bump();
+                    let method_def = self.method_definition(
+                        kw_span, "METHOD-AFTER:", super::ast::MethodKind::After)?;
+                    items.push(Item::Method(method_def));
+                }
+                Some("value") => {
+                    // `<expr> VALUE name` — capture all pending
+                    // expressions as the initial-value body.  Unlike
+                    // CONSTANT we don't peep for a literal vs. computed
+                    // split: VALUE is settable, so emit always uses
+                    // the same SYMBOL/get-global/set-global shape and
+                    // the initial-value path runs the body once at
+                    // load time.
+                    let kw_span = t.span;
+                    if pending.is_empty() {
+                        return Err(ParseError::ConstantWithoutValue {
+                            keyword: "VALUE", at: kw_span,
+                        });
+                    }
+                    let value_start = pending.first().unwrap().span().start;
+                    let initial = std::mem::take(&mut pending);
+                    pending_start = None;
+                    self.bump(); // consume `value`
+                    let name_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName { keyword: "VALUE", at: kw_span },
+                    )?;
+                    let (name, name_span) = match &name_tok.kind {
+                        Tok::Word(w) => (w.clone(), name_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "VALUE", at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    items.push(Item::Value(ValueDef {
+                        name, name_span, initial,
+                        span: Span { start: value_start, end: name_span.end },
+                    }));
+                }
                 _ => {
                     // Regular expression: accumulate into pending.
                     if pending_start.is_none() {
@@ -492,6 +570,226 @@ impl<'t> Parser<'t> {
         }))
     }
 
+    /// Already past `CLASS:`.  Consumes through the matching `;`.
+    /// Grammar: `name [EXTENDS parent] (SLOT: slot-name)* ;`.
+    fn class_definition(&mut self, kw_span: Span) -> Result<ClassDef, ParseError> {
+        // Class name.
+        let name_tok = self.peek().ok_or(
+            ParseError::ExpectedDefiningName { keyword: "CLASS:", at: kw_span },
+        )?;
+        let (name, name_span) = match &name_tok.kind {
+            Tok::Word(w) => (w.clone(), name_tok.span),
+            _ => return Err(ParseError::ExpectedDefiningName {
+                keyword: "CLASS:", at: kw_span,
+            }),
+        };
+        self.bump();
+        self.skip_comments();
+
+        // Optional EXTENDS clause.
+        let mut extends: Option<String> = None;
+        if let Some(t) = self.peek() {
+            if let Tok::Word(w) = &t.kind {
+                if w.eq_ignore_ascii_case("extends") {
+                    self.bump();  // consume `extends`
+                    self.skip_comments();
+                    let parent_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName {
+                            keyword: "EXTENDS", at: kw_span,
+                        },
+                    )?;
+                    match &parent_tok.kind {
+                        Tok::Word(w) => { extends = Some(w.clone()); }
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "EXTENDS", at: kw_span,
+                        }),
+                    }
+                    self.bump();
+                }
+            }
+        }
+
+        // Body: SLOT: x SLOT: y ... ; (with comments interleaved).
+        let mut slots: Vec<SlotDef> = Vec::new();
+        let end_span;
+        loop {
+            self.skip_comments();
+            let Some(t) = self.peek() else {
+                return Err(ParseError::UnterminatedDefinition { opened_at: kw_span });
+            };
+            match &t.kind {
+                Tok::Word(w) if w == ";" => {
+                    end_span = t.span;
+                    self.bump();
+                    break;
+                }
+                Tok::Word(w) if w.eq_ignore_ascii_case("slot:") => {
+                    self.bump();  // consume `slot:`
+                    self.skip_comments();
+                    let slot_tok = self.peek().ok_or(
+                        ParseError::ExpectedDefiningName {
+                            keyword: "SLOT:", at: kw_span,
+                        },
+                    )?;
+                    let (slot_name, slot_span) = match &slot_tok.kind {
+                        Tok::Word(w) => (w.clone(), slot_tok.span),
+                        _ => return Err(ParseError::ExpectedDefiningName {
+                            keyword: "SLOT:", at: kw_span,
+                        }),
+                    };
+                    self.bump();
+                    slots.push(SlotDef { name: slot_name, name_span: slot_span });
+                }
+                _ => {
+                    // Stray content inside a CLASS body — flag clearly.
+                    return Err(ParseError::StrayControlWord {
+                        word: match &t.kind {
+                            Tok::Word(w) => w.clone(),
+                            _ => "<non-word>".to_string(),
+                        },
+                        at: t.span,
+                    });
+                }
+            }
+        }
+
+        Ok(ClassDef {
+            name, name_span, extends, slots,
+            span: Span { start: kw_span.start, end: end_span.end },
+        })
+    }
+
+    /// Already past `GENERIC:`.  Consumes `name ( effect )`.
+    fn generic_declaration(&mut self, kw_span: Span) -> Result<GenericDef, ParseError> {
+        let name_tok = self.peek().ok_or(
+            ParseError::ExpectedDefiningName { keyword: "GENERIC:", at: kw_span },
+        )?;
+        let (name, name_span) = match &name_tok.kind {
+            Tok::Word(w) => (w.clone(), name_tok.span),
+            _ => return Err(ParseError::ExpectedDefiningName {
+                keyword: "GENERIC:", at: kw_span,
+            }),
+        };
+        self.bump();
+        // Required stack effect annotation as a `( ... -- ... )` block
+        // comment immediately after.
+        let Some(Token { kind: Tok::BlockComment(body), span: eff_span }) = self.peek() else {
+            return Err(ParseError::MalformedStackEffect {
+                at: name_span,
+                reason: "GENERIC: requires a stack effect annotation",
+            });
+        };
+        let effect = parse_stack_effect(body, *eff_span).ok_or(
+            ParseError::MalformedStackEffect {
+                at: *eff_span,
+                reason: "GENERIC: stack effect must contain `--`",
+            },
+        )?;
+        let end = *eff_span;
+        self.bump();
+        Ok(GenericDef {
+            name, name_span, effect,
+            span: Span { start: kw_span.start, end: end.end },
+        })
+    }
+
+    /// Already past `METHOD:` (or `METHOD-BEFORE:` / `METHOD-AFTER:`).
+    /// Consumes `gname ( a:cls -- ... ) body ;`.  The `kw_static` and
+    /// `kind` parameters discriminate primary vs aux flavour: the
+    /// keyword text is used for diagnostics; the kind is recorded on
+    /// the resulting MethodDef and drives emit-time routing to the
+    /// primary or shadow `:before`/`:after` generic.
+    fn method_definition(
+        &mut self,
+        kw_span: Span,
+        kw_static: &'static str,
+        kind: super::ast::MethodKind,
+    ) -> Result<MethodDef, ParseError> {
+        let name_tok = self.peek().ok_or(
+            ParseError::ExpectedDefiningName { keyword: kw_static, at: kw_span },
+        )?;
+        let (gname, gname_span) = match &name_tok.kind {
+            Tok::Word(w) => (w.clone(), name_tok.span),
+            _ => return Err(ParseError::ExpectedDefiningName {
+                keyword: kw_static, at: kw_span,
+            }),
+        };
+        self.bump();
+        // Required effect annotation, with specialisers in the input
+        // list as `name:classname`.
+        let Some(Token { kind: Tok::BlockComment(body), span: eff_span }) = self.peek() else {
+            return Err(ParseError::MalformedStackEffect {
+                at: gname_span,
+                reason: "METHOD: requires a stack effect annotation",
+            });
+        };
+        let raw_effect = parse_stack_effect(body, *eff_span).ok_or(
+            ParseError::MalformedStackEffect {
+                at: *eff_span,
+                reason: "METHOD: stack effect must contain `--`",
+            },
+        )?;
+        let eff_span_copy = *eff_span;
+        self.bump();
+
+        // Extract specialisers: any input of the form `name:class`
+        // contributes a MethodSpecializer, and the bare `name` part
+        // becomes the canonical input name.
+        let mut specializers: Vec<MethodSpecializer> = Vec::new();
+        let mut clean_inputs: Vec<String> = Vec::with_capacity(raw_effect.inputs.len());
+        for (i, raw) in raw_effect.inputs.iter().enumerate() {
+            if let Some((pname, cls)) = raw.split_once(':') {
+                if !pname.is_empty() && !cls.is_empty() {
+                    specializers.push(MethodSpecializer {
+                        position: i as u32,
+                        param_name: pname.to_string(),
+                        class_name: cls.to_string(),
+                        at: eff_span_copy,
+                    });
+                    clean_inputs.push(pname.to_string());
+                    continue;
+                }
+            }
+            clean_inputs.push(raw.clone());
+        }
+        let effect = StackEffect {
+            inputs: clean_inputs,
+            outputs: raw_effect.outputs.clone(),
+            span: raw_effect.span,
+        };
+
+        // Body until `;`.
+        let mut body: Vec<Expr> = Vec::new();
+        let end_span;
+        loop {
+            self.skip_comments();
+            let Some(t) = self.peek() else {
+                return Err(ParseError::UnterminatedDefinition { opened_at: kw_span });
+            };
+            match &t.kind {
+                Tok::Word(w) if w == ";" => {
+                    end_span = t.span;
+                    self.bump();
+                    break;
+                }
+                _ => {
+                    let e = self.expr_one()?;
+                    body.push(e);
+                }
+            }
+        }
+
+        Ok(MethodDef {
+            generic_name: gname,
+            generic_name_span: gname_span,
+            specializers,
+            effect,
+            body,
+            span: Span { start: kw_span.start, end: end_span.end },
+            kind,
+        })
+    }
+
     /// Parse a single expression: literal, word-ref, or a structured
     /// control-flow block.  Caller has already filtered out `:`, `;`,
     /// and (at the outer level) terminators.  When we encounter a
@@ -554,6 +852,30 @@ impl<'t> Parser<'t> {
                         };
                         self.bump(); // consume the target name
                         Ok(Expr::Tick {
+                            name,
+                            span: Span { start: t_span.start, end },
+                        })
+                    }
+                    // `TO name` — store-to-VALUE parsing word.  Like
+                    // `'`, consumes the next blank-delimited token as
+                    // its target.  Resolve checks the name binds to a
+                    // VALUE; emit lowers to `<storage> set-global` on
+                    // the underlying Factor global.
+                    "to" => {
+                        self.bump(); // consume `to`
+                        let name_tok = self.peek().ok_or(
+                            ParseError::ExpectedDefiningName {
+                                keyword: "TO", at: t_span,
+                            },
+                        )?;
+                        let (name, end) = match &name_tok.kind {
+                            Tok::Word(w) => (w.clone(), name_tok.span.end),
+                            _ => return Err(ParseError::ExpectedDefiningName {
+                                keyword: "TO", at: t_span,
+                            }),
+                        };
+                        self.bump(); // consume target name
+                        Ok(Expr::To {
                             name,
                             span: Span { start: t_span.start, end },
                         })

@@ -59,6 +59,15 @@ read -r -d '' FACTOR_EXPR <<'EOF' || true
 USING: vocabs.loader namespaces init ;
 << "E:/NewFactor/factor" add-vocab-root >>
 USING: forth.runtime forth.wf64-gfx alien.remote-control ;
+! `multi-methods` lives in extra/.  We load it here so the
+! resulting image has it baked in — at runtime our deployed
+! factor.dll has no access to the Factor source tree and
+! `USE: multi-methods` would otherwise fail.  Pulling it in
+! adds ~1 MB to the image (200-line vocab + its compiled forms)
+! and unlocks the entire CLOS-shape feature line: multi-method
+! dispatch, before/after/around method combinations,
+! call-next-method, and the rest of the auxiliary-method machinery.
+USE: multi-methods
 init-remote-control
 [ boot do-startup-hooks init-remote-control ] set-startup-quot
 "E:/NewFactor/images/factorforth.image" save-image-and-exit

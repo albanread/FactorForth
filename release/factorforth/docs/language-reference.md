@@ -1,11 +1,11 @@
 # Language reference
 
-FactorForth implements 95%+ of ANS Forth Core plus several
+Factor4th implements 95%+ of ANS Forth Core plus several
 extensions.  This document lists what's available, organised by
 topic.  See [Forth tutorial](forth-tutorial.md) for an
 introduction to the basics.
 
-Words marked **`new`** are FactorForth extensions not present
+Words marked **`new`** are Factor4th extensions not present
 in stock ANS Forth.
 
 ## Stack manipulation
@@ -138,7 +138,7 @@ Cells are 8 bytes (64-bit).
 
 Pictured number output: `<#  #  #s  sign  hold  #>`.
 
-## Strings (FactorForth extension - $-suffix vocab) `new`
+## Strings (Factor4th extension - $-suffix vocab) `new`
 
 | word    | effect                          |
 |---------|---------------------------------|
@@ -157,7 +157,7 @@ Pictured number output: `<#  #  #s  sign  hold  #>`.
 
 See [managed-strings.md](managed-strings.md) for details.
 
-## LET algebra (FactorForth extension) `new`
+## LET algebra (Factor4th extension) `new`
 
 ```
 LET (inputs) -> (outputs) =
@@ -188,7 +188,7 @@ tan ln exp`, names from the inputs list.  See
 - `mod` is **floored** (matches Python, math), not truncated.
 - Strings have **two** representations: managed `$` and raw
   `c-addr u`.  Pick what matches your task.
-- `LET` and `S$"` are FactorForth extensions.
+- `LET` and `S$"` are Factor4th extensions.
 
 See `docs/ANS_GAP_ANALYSIS.md` (in the source repo) for a
 detailed conformance breakdown.

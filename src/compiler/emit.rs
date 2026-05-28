@@ -28,7 +28,7 @@ use std::fmt::Write;
 use super::ast::{
     CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
     ConstantDef, CreateDef, Definition, Expr, Item, Literal, LoopKind,
-    Program, TemplateInstanceDef, VariableDef,
+    Program, TemplateInstanceDef, ValueDef, VariableDef,
 };
 use super::lex::StringKind;
 use super::resolve::Target;
@@ -74,6 +74,39 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     set.insert("math.functions");
     set.insert("math.order");
     set.insert("math.constants");
+    // Object-system vocabs.  `classes.tuple` for TUPLE: and
+    // `accessors` for slot accessors are always needed when any
+    // class-system item is present.  For generics + methods we
+    // pull in `multi-methods` (from extra/, baked into our image
+    // at build time) — its `GENERIC:` / `METHOD: { class-list }
+    // generic body ;` syntax unifies single- and multi-dispatch.
+    let has_class_system = s.program.items.iter().any(|i| matches!(i,
+        super::ast::Item::Class(_) | super::ast::Item::Generic(_)
+        | super::ast::Item::Method(_) | super::ast::Item::RawFactor(_)
+    ));
+    let has_methods = s.program.items.iter().any(|i| matches!(i,
+        super::ast::Item::Generic(_) | super::ast::Item::Method(_)
+    ));
+    if has_class_system {
+        set.insert("classes.tuple");
+        set.insert("accessors");
+    }
+    if has_methods {
+        set.insert("multi-methods");
+    }
+    // Aux method combinations (`METHOD-BEFORE:` / `METHOD-AFTER:`)
+    // require a wrapper word that calls the before-generic, then
+    // the primary, then the after-generic.  The wrapper uses
+    // Factor's `::` locals form to hold the inputs across all
+    // three calls, so we pull in `locals` when any aux method is
+    // present in this compile.
+    let has_aux_methods = s.program.items.iter().any(|i| matches!(i,
+        super::ast::Item::Method(m)
+        if !matches!(m.kind, super::ast::MethodKind::Primary)
+    ));
+    if has_aux_methods {
+        set.insert("locals");
+    }
     for t in s.word_targets.values() {
         if let Some(v) = t.vocab() { set.insert(v); }
     }
@@ -83,10 +116,35 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     set.into_iter().collect()
 }
 
+/// Compute the set of generic names (lowercase) in this compile that
+/// have at least one `METHOD-BEFORE:` or `METHOD-AFTER:` registered.
+/// Used by `emit_generic` and `emit_method` to decide whether to
+/// emit the shadow `:before` / `:after` generics + the `:: wrapper`
+/// orchestration, or fall back to the simple direct-dispatch shape.
+///
+/// Same-eval only: an aux method on a generic that was declared in
+/// a *prior* eval (CompileContext) won't produce a wrapper here —
+/// the prior generic is already a plain multi-methods generic with
+/// no `:before` / `:after` shadow.  Cross-eval aux support would
+/// need persistent state in CompileContext and is a follow-up; for
+/// now define generic + all its aux methods in the same compile.
+fn aux_generics(items: &[Item]) -> std::collections::BTreeSet<String> {
+    let mut s = std::collections::BTreeSet::new();
+    for it in items {
+        if let Item::Method(m) = it {
+            if !matches!(m.kind, super::ast::MethodKind::Primary) {
+                s.insert(m.generic_name.to_ascii_lowercase());
+            }
+        }
+    }
+    s
+}
+
 /// Top-level emit entry point.
 pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
     let mut out = String::with_capacity(256);
     emit_using_line(r, &mut out);
+    let aux = aux_generics(&r.program.items);
     // `:` definitions need a target vocab.  Factor's `scratchpad`
     // vocab exists in any bootstrapped image and is the conventional
     // home for interactive / eval'd definitions.  Without this, a
@@ -142,10 +200,36 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
                 emit_template_instance(ti, &mut out); out.push('\n');
                 wrote_anything = true;
             }
+            Item::Value(v) => {
+                emit_value(v, r, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            Item::Class(c) => {
+                emit_class(c, r, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            Item::Generic(g) => {
+                emit_generic(g, &aux, &mut out); out.push('\n');
+                wrote_anything = true;
+            }
+            Item::RawFactor(raw) => {
+                out.push_str(&raw.source);
+                out.push('\n');
+                wrote_anything = true;
+            }
             // Item::Template itself emits NOTHING — it's a parse-
             // time/sema-time construct.  Instances carry the body.
             Item::Template(_) => {}
             _ => {}
+        }
+    }
+
+    // Pass B': method definitions.  After classes + generics so the
+    // generic word and the dispatched class exist at parse time.
+    for item in &r.program.items {
+        if let Item::Method(m) = item {
+            emit_method(m, r, &aux, &mut out); out.push('\n');
+            wrote_anything = true;
         }
     }
 
@@ -226,6 +310,41 @@ fn emit_variable(v: &VariableDef, r: &Sema, out: &mut String) {
     }
 }
 
+/// Mangle a VALUE name into the Factor symbol that holds its
+/// underlying storage.  Used by both the VALUE declaration emit (which
+/// creates the SYMBOL and seeds it from the initial-value body) and
+/// by `Expr::To` emit (which writes to it via `set-global`).  The
+/// public reader word for the VALUE keeps the user's name; the
+/// storage symbol takes a `nf-value-` prefix so the two don't collide
+/// in Factor's namespace.
+fn value_storage_name(name_lc: &str) -> String {
+    format!("nf-value-{name_lc}")
+}
+
+/// Emit a VALUE definition: a hidden Factor `SYMBOL:` holds the
+/// current value, a one-shot setup line seeds it from the initial-
+/// value body, and a `:` reader word pushes the current value when
+/// the VALUE name is invoked in Forth code.  Polymorphic on Factor's
+/// tagged stack — `set-global` / `get-global` don't care about the
+/// stored type, so the same slot will happily hold an int, a float,
+/// a string, or a quotation depending on what was last `TO`'d in.
+///
+/// Three lines:
+///   1. `SYMBOL: nf-value-<name>`           — the storage handle
+///   2. `<initial-body> nf-value-<name> set-global` — seed at load
+///   3. `: <name> ( -- v ) nf-value-<name> get-global ; inline`
+///                                          — the reader word
+fn emit_value(v: &ValueDef, r: &Sema, out: &mut String) {
+    let lc = v.name.to_ascii_lowercase();
+    let storage = value_storage_name(&lc);
+    write!(out, "SYMBOL: {storage}\n").unwrap();
+    emit_exprs(&v.initial, r, out);
+    write!(out, " {storage} set-global\n").unwrap();
+    write!(out, ": {n} ( -- v ) {storage} get-global ; inline",
+        n = super::resolve::factor_user_name(&lc),
+    ).unwrap();
+}
+
 /// Emit a standard collection (array / farray / cbuffer).  Three
 /// lines per instance:
 ///
@@ -236,6 +355,265 @@ fn emit_variable(v: &VariableDef, r: &Sema, out: &mut String) {
 ///        nf-coll-<name> get-global swap <elt_size> * nf-addr+
 ///    ; inline`
 ///
+/// Emit a CLASS: declaration as a Factor TUPLE: plus a constructor
+/// and per-slot getter/setter `:` defs.  Sprint 1 of the object
+/// system — see docs/design/object-system.md.
+///
+/// Slot list ordering follows Factor's TUPLE: inheritance rules:
+/// parent slots first, then own slots.  We use `Sema.class_slots`
+/// (populated by `lower_classes::compute_class_slots`) to find the
+/// flattened slot list, so:
+///
+///   - the constructor stack effect counts ALL slots (parent +
+///     own), matching what `Factor's boa` consumes
+///   - getters/setters are generated for every slot the instance
+///     has, including inherited ones, so user code can write
+///     `colored-point>x` even though `x` is declared on `point`
+///
+/// The TUPLE: declaration itself uses Factor's `< parent` chain —
+/// only own slots are listed there; Factor's tuple system fills in
+/// inheritance.
+fn emit_class(c: &super::ast::ClassDef, r: &Sema, out: &mut String) {
+    let n = c.name.to_ascii_lowercase();
+    let empty: Vec<String> = Vec::new();
+    let all_slots = r.class_slots.get(&n).unwrap_or(&empty);
+    // TUPLE: name [< parent] { slot } ... ;
+    // The TUPLE: form only lists THIS class's own slots; parent
+    // slots come via the `< parent` clause.
+    out.push_str("TUPLE: ");
+    out.push_str(&n);
+    if let Some(parent) = &c.extends {
+        out.push_str(" < ");
+        out.push_str(&parent.to_ascii_lowercase());
+    }
+    for s in &c.slots {
+        out.push_str(" { ");
+        out.push_str(&s.name.to_ascii_lowercase());
+        out.push_str(" }");
+    }
+    out.push_str(" ;\n");
+    // Constructor: <name> ( s1 s2 ... -- p ) name boa ; inline
+    // The constructor consumes ALL slots in flattened order
+    // (parent first), which is what `boa` expects.
+    out.push_str(": <");
+    out.push_str(&n);
+    out.push_str("> ( ");
+    for s in all_slots {
+        out.push_str(s);
+        out.push(' ');
+    }
+    out.push_str("-- p ) ");
+    out.push_str(&n);
+    out.push_str(" boa ; inline\n");
+    // Per-slot accessors for every slot the instance has, including
+    // inherited ones.  Factor's accessor primitives (slot>> and
+    // >>slot) are defined on the slot name globally — they work on
+    // any tuple that has a slot of that name — so the auto-generated
+    // wrappers compose with inheritance transparently.
+    //
+    // Three words per slot:
+    //   {n}>{sn}    ( p -- v )    getter
+    //   {sn}>>{n}   ( p v -- p )  chainable setter (returns object)
+    //   {n}.{sn}!   ( v p -- )    ANS-flavoured store (drops object)
+    for sn in all_slots {
+        write!(out, ": {n}>{sn} ( p -- v ) {sn}>> ; inline\n").unwrap();
+        write!(out, ": {sn}>>{n} ( p v -- p ) >>{sn} ; inline\n").unwrap();
+        write!(out, ": {n}.{sn}! ( v p -- ) swap >>{sn} drop ; inline\n").unwrap();
+    }
+}
+
+/// Emit a GENERIC: declaration using `multi-methods`' form.  The
+/// fully-qualified `multi-methods:GENERIC:` name avoids the
+/// name-collision warning Factor would otherwise emit (the
+/// standard `generic` vocab also exports `GENERIC:`).  Behaviour
+/// is the same for single-dispatch; the difference only shows up
+/// when methods specialise on multiple inputs.
+fn emit_generic(
+    g: &super::ast::GenericDef,
+    aux: &std::collections::BTreeSet<String>,
+    out: &mut String,
+) {
+    let n = g.name.to_ascii_lowercase();
+    let n_in = g.effect.inputs.len();
+    let n_out = g.effect.outputs.len();
+    let has_aux = aux.contains(&n);
+
+    if !has_aux {
+        // Plain generic — no wrapper, no shadows.  Fast path.
+        out.push_str("multi-methods:GENERIC: ");
+        out.push_str(&n);
+        out.push_str(" ( ");
+        for s in &g.effect.inputs { out.push_str(s); out.push(' '); }
+        out.push_str("-- ");
+        for s in &g.effect.outputs { out.push_str(s); out.push(' '); }
+        out.push_str(")\n");
+        return;
+    }
+
+    // Aux-methods path.  Emit:
+    //   1. `gname:primary` — the actual dispatch generic; carries the
+    //       user-declared effect.  Primary METHOD:s attach here.
+    //   2. `gname:before` — shadow generic returning nothing; aux
+    //       BEFORE methods attach here.  An object-default no-op
+    //       drops the inputs so unmatched calls don't throw.
+    //   3. `gname:after`  — symmetric to :before.
+    //   4. `gname`        — `::` wrapper that calls before, primary,
+    //       after in order, returning what primary produced.
+    //
+    // The wrapper uses Factor `locals`' `::` syntax so we can hold
+    // the inputs across all three calls without stack juggling.
+    // Synthesised local names (`a0`, `a1`, ...) avoid colliding
+    // with the user's effect-comment names (which may not be
+    // valid Factor identifiers).
+    let in_effect: String = {
+        let mut s = String::new();
+        for v in &g.effect.inputs { s.push_str(v); s.push(' '); }
+        s
+    };
+    let out_effect: String = {
+        let mut s = String::new();
+        for v in &g.effect.outputs { s.push_str(v); s.push(' '); }
+        s
+    };
+
+    write!(out, "multi-methods:GENERIC: {n}:primary ( {in_effect}-- {out_effect})\n",
+        n = n, in_effect = in_effect, out_effect = out_effect).unwrap();
+    write!(out, "multi-methods:GENERIC: {n}:before ( {in_effect}-- )\n",
+        n = n, in_effect = in_effect).unwrap();
+    write!(out, "multi-methods:GENERIC: {n}:after ( {in_effect}-- )\n",
+        n = n, in_effect = in_effect).unwrap();
+
+    // Default no-op `{ object object ... }` methods on :before and
+    // :after so dispatch can't fail when no aux matches.  Body
+    // drops the N inputs.
+    if n_in > 0 {
+        let object_list: String = std::iter::repeat("object ").take(n_in).collect();
+        let drops = ndrop(n_in);
+        write!(out, "multi-methods:METHOD: {n}:before {{ {ol}}} {dr} ;\n",
+            n = n, ol = object_list, dr = drops).unwrap();
+        write!(out, "multi-methods:METHOD: {n}:after {{ {ol}}} {dr} ;\n",
+            n = n, ol = object_list, dr = drops).unwrap();
+    }
+
+    // Wrapper `:: gname ( a0 .. aN -- r0 .. rM ) ... ;`.  Uses
+    // `:>` for the primary's outputs (multi-value when M > 1).
+    let in_locals: String = (0..n_in).map(|i| format!("a{i} ")).collect();
+    let in_push:   String = (0..n_in).map(|i| format!("a{i} ")).collect();
+    let out_locals: String = (0..n_out).map(|i| format!("r{i} ")).collect();
+    write!(out, ":: {n} ( {il}-- {ol}) ", n = n,
+        il = in_locals, ol = out_locals).unwrap();
+    // Before pass — return value is empty.
+    if n_in > 0 {
+        write!(out, "{ip}{n}:before ", ip = in_push, n = n).unwrap();
+    }
+    // Primary call — capture outputs into `r0 .. rM` via `:>`.
+    if n_in > 0 {
+        out.push_str(&in_push);
+    }
+    write!(out, "{n}:primary", n = n).unwrap();
+    if n_out == 0 {
+        out.push(' ');
+    } else if n_out == 1 {
+        write!(out, " :> r0 ").unwrap();
+    } else {
+        write!(out, " :> ( {ol}) ", ol = out_locals).unwrap();
+    }
+    // After pass.
+    if n_in > 0 {
+        write!(out, "{ip}{n}:after ", ip = in_push, n = n).unwrap();
+    }
+    // Return the primary's outputs.
+    out.push_str(&out_locals);
+    out.push_str(";\n");
+}
+
+/// Factor word that drops the top `n` items.  For 1..=3 we use the
+/// built-in shorthand (`drop` / `2drop` / `3drop`); for larger N
+/// we fall back to repeating `drop` (rare in practice — methods
+/// don't typically have >3 inputs).
+fn ndrop(n: usize) -> String {
+    match n {
+        0 => "".to_string(),
+        1 => "drop".to_string(),
+        2 => "2drop".to_string(),
+        3 => "3drop".to_string(),
+        _ => {
+            // Chain 2drops + a stray drop for odd N.
+            let mut s = String::new();
+            let mut k = n;
+            while k >= 2 { s.push_str("2drop "); k -= 2; }
+            if k == 1 { s.push_str("drop "); }
+            s.trim_end().to_string()
+        }
+    }
+}
+
+/// Emit a METHOD: definition using `multi-methods`' syntax:
+///
+///   METHOD: { class1 class2 ... } generic body ;
+///
+/// The class list is a Factor array of class names — one per
+/// specialiser the user declared.  For single-dispatch (one
+/// specialiser), `{ class1 }` behaves identically to standard
+/// generic's `M: class1`.  For multi-dispatch, the list carries
+/// all specialised positions and multi-methods sorts methods by
+/// specificity across the entire list.
+///
+/// A method with NO specialisers gets a one-element `{ object }`
+/// list — Factor's `object` class is the universal supertype,
+/// matching any value.  Behaves as the catch-all method.
+fn emit_method(
+    m: &super::ast::MethodDef,
+    r: &Sema,
+    aux: &std::collections::BTreeSet<String>,
+    out: &mut String,
+) {
+    let g_lc = m.generic_name.to_ascii_lowercase();
+    // Route based on method kind:
+    //   - Primary methods attach to `gname:primary` when the generic
+    //     has aux methods this compile (so the wrapper finds them),
+    //     otherwise direct to `gname` for the fast no-aux path.
+    //   - Before / After methods attach to the shadow `:before` /
+    //     `:after` generics — these only exist when aux was detected,
+    //     so this case implies has_aux is true.
+    let has_aux = aux.contains(&g_lc);
+    let target = match m.kind {
+        super::ast::MethodKind::Primary => {
+            if has_aux { format!("{g_lc}:primary") } else { g_lc.clone() }
+        }
+        super::ast::MethodKind::Before => format!("{g_lc}:before"),
+        super::ast::MethodKind::After  => format!("{g_lc}:after"),
+    };
+    // multi-methods syntax: `METHOD: generic { class1 class2 ... }
+    // body ;`.  Generic name first, then the class list as a
+    // Factor array literal.  For single-dispatch (one specialiser)
+    // it's a one-element array; for multi-dispatch each position
+    // is a class.  Empty specialisers fall back to `{ object }`
+    // which matches anything (Factor's `object` is the universal
+    // supertype).
+    out.push_str("multi-methods:METHOD: ");
+    out.push_str(&target);
+    out.push_str(" { ");
+    if m.specializers.is_empty() {
+        out.push_str("object ");
+    } else {
+        for s in &m.specializers {
+            out.push_str(&s.class_name.to_ascii_lowercase());
+            out.push(' ');
+        }
+    }
+    out.push_str("} ");
+    // Method body runs through the same emit_exprs path as a `:` def.
+    if super::lower_exit::body_uses_exit(&m.body, &r.word_targets) {
+        out.push_str("[ ");
+        emit_exprs(&m.body, r, out);
+        out.push_str(" ] continuations:with-return");
+    } else {
+        emit_exprs(&m.body, r, out);
+    }
+    out.push_str(" ;\n");
+}
+
 /// The accessor uses `nf-addr+` rather than `+` because + on an
 /// nf-addr fails (our address model is opaque).  Future
 /// optimisation: emit Factor `specialized-array`s when the
@@ -826,10 +1204,21 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
             out.push_str(" ]");
         }
 
+        Expr::To { name, .. } => {
+            // `TO name` stores the top of stack into the VALUE's
+            // backing Factor global.  We don't go through word_targets
+            // — the storage symbol name is uniformly derived from the
+            // public VALUE name.  Resolve has already verified `name`
+            // refers to a VALUE.
+            let lc = name.to_ascii_lowercase();
+            let storage = value_storage_name(&lc);
+            write!(out, "{storage} set-global").unwrap();
+        }
+
         // LET form: lower to Factor `[| ... | ... ] call( ... )`
         // via the let_lang::codegen module.
         Expr::LetForm { form, .. } => {
-            match super::let_lang::lower_to_factor(form) {
+            match super::let_lang::lower_to_factor(form, &r.class_slots) {
                 Ok(ir) => out.push_str(&ir),
                 Err(e) => {
                     // Codegen rejected the form post-parse.  Emit a

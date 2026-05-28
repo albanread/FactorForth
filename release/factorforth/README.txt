@@ -1,5 +1,5 @@
-FactorForth - ANS Forth IDE on Factor's VM
-==========================================
+Factor4th - ANS Forth IDE on Factor's VM
+========================================
 
 Quick start
 -----------
@@ -23,6 +23,11 @@ Layout
     demos\              - sample programs reachable via the Demos menu
     docs\               - README, language reference, tutorials
 
+(Binary and image filenames keep their FactorForth prefix from
+the earlier name; the product is now called Factor4th — see
+docs/release-notes.md for the rename note.  A future release
+will harmonise the filenames.)
+
 Where things live at runtime
 ----------------------------
 factorforth-ui.exe looks for factor.dll and factorforth.image
@@ -33,13 +38,16 @@ on disk as long as the layout above stays intact.
 What's inside
 -------------
 - A Rust ANS Forth compiler that emits Factor IR.  Every word
-  you type or load goes through lex -> parse -> resolve ->
+  you type or load goes through lex -> parse -> desugar passes
+  (lower_qdup, lower_recurse, lower_exit) -> resolve ->
   effect-check -> sema -> emit, then the IR is handed to the
   embedded Factor VM.
 
-- 95%+ of the ANS Forth Core word set, plus FactorForth
+- 95%+ of the ANS Forth Core word set, plus Factor4th
   extensions: LET algebra DSL, managed strings ($-suffix vocab),
-  S$" string literals, Forth 2012 test-runner support.
+  S$" string literals, Forth 2012 test-runner support,
+  polymorphic VALUE / TO over Factor's tagged stack, TYPEOF +
+  type predicates.
 
 - An iGui MDI front-end (Direct2D / DirectWrite) borrowed from
   the WF64 project: REPL pane, source editor, log view, crash
@@ -60,6 +68,6 @@ More
 See docs\index.md for the table of contents:
 - getting-started.md   - your first hour in the IDE
 - forth-tutorial.md    - learn Forth from scratch
-- language-reference.md - every FactorForth-specific word
+- language-reference.md - every Factor4th-specific word
 - ide-guide.md         - panes, menus, keyboard shortcuts
 - architecture.md      - how the compiler + VM fit together

@@ -71,6 +71,11 @@ pub enum ResolveError {
     /// requirement here with a clear message rather than letting
     /// Factor reject the IR.
     RecurseNeedsEffect { word: String, at: Span },
+    /// `TO name` where `name` isn't a VALUE (no such name, or it's
+    /// a regular word / VARIABLE / CONSTANT).  Catching this here
+    /// gives a useful message before Factor produces a "no word
+    /// nf-value-X" parse error on the emitted IR.
+    ToNotValue { name: String, at: Span },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -83,6 +88,8 @@ impl std::fmt::Display for ResolveError {
             ResolveError::RecurseNeedsEffect { word, at } =>
                 write!(f, "`{word}` at {at} uses RECURSE but has no stack-effect annotation \
                            — add `( ... -- ... )` after the name"),
+            ResolveError::ToNotValue { name, at } =>
+                write!(f, "`TO {name}` at {at}: `{name}` is not a VALUE (TO only works on VALUEs)"),
         }
     }
 }
@@ -378,6 +385,25 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         // callcc allocation otherwise).
         ("exit",       QualifiedBuiltin { vocab: "continuations", factor_name: "return" }),
 
+        // Type introspection — works with the polymorphic VALUE
+        // design.  `TYPEOF ( x -- code )` returns a small stable
+        // integer the user can CASE on; `INT?`/`FLOAT?`/`STRING?`/
+        // `XT?`/`ADDR?` are ANS-style predicates returning -1/0.
+        // The type-code constants are session-boot-defined Factor
+        // CONSTANT:s so they fold to literal integers at JIT time.
+        ("typeof",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-typeof"      }),
+        ("int?",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-int?"        }),
+        ("float?",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-float?"      }),
+        ("string?",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-string?"     }),
+        ("xt?",        QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-xt?"         }),
+        ("addr?",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-addr-pred?"  }),
+        ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
+        ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
+        ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),
+        ("xt-type",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "xt-type"       }),
+        ("addr-type",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "addr-type"     }),
+        ("other-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "other-type"    }),
+
         // ── Graphics (forth.wf64-gfx) ────────────────────────────────
         //
         // Surface the iGui pane API to user Forth.  Backed by the
@@ -448,8 +474,40 @@ pub fn resolve_with_prior(
     prog: Program,
     prior_user_words: &HashMap<String, Span>,
 ) -> Result<Resolved, ResolveError> {
+    resolve_with_prior_and_values(prog, prior_user_words, &HashMap::new())
+}
+
+/// Like [`resolve_with_prior`] but also accepts a set of VALUE names
+/// defined in prior compiles.  TO references resolve against this
+/// set (plus this compile's local VALUEs); a `TO name` whose target
+/// isn't a VALUE produces `ToNotValue` at resolve time rather than
+/// a Factor-side parse error later.
+pub fn resolve_with_prior_and_values(
+    prog: Program,
+    prior_user_words: &HashMap<String, Span>,
+    prior_value_names: &HashMap<String, Span>,
+) -> Result<Resolved, ResolveError> {
+    let empty_classes: HashMap<String, Vec<String>> = HashMap::new();
+    resolve_with_prior_and_values_and_classes(
+        prog, prior_user_words, prior_value_names, &empty_classes,
+    )
+}
+
+/// Like [`resolve_with_prior_and_values`] but additionally accepts
+/// a `class_slots` map (lowercased class name → flattened slot list,
+/// parent slots first).  Used to register the right synthesised
+/// constructor / accessor names per class.
+pub fn resolve_with_prior_and_values_and_classes(
+    prog: Program,
+    prior_user_words: &HashMap<String, Span>,
+    prior_value_names: &HashMap<String, Span>,
+    class_slots: &HashMap<String, Vec<String>>,
+) -> Result<Resolved, ResolveError> {
     let builtins = builtin_table();
     let mut user_words: HashMap<String, Span> = HashMap::new();
+    // Local VALUE names this compile defines.  Combined with
+    // `prior_value_names` below to form the lookup set for TO.
+    let mut local_value_names: HashMap<String, Span> = HashMap::new();
 
     // Pass 1: collect user-defined word names so forward references
     // and recursion resolve correctly.  ANS Forth allows defining a
@@ -478,6 +536,31 @@ pub fn resolve_with_prior(
             Item::Collection(cl)       => register(&cl.name, cl.name_span, &mut user_words)?,
             Item::Template(t)          => register(&t.name, t.name_span, &mut user_words)?,
             Item::TemplateInstance(ti) => register(&ti.name, ti.name_span, &mut user_words)?,
+            Item::Value(v) => {
+                register(&v.name, v.name_span, &mut user_words)?;
+                // Also remember it as a VALUE specifically so TO
+                // resolution can verify the target.
+                local_value_names.insert(v.name.to_ascii_lowercase(), v.name_span);
+            }
+            Item::Class(c) => {
+                // Look up the flattened slot list from the
+                // pre-computed map and register every synthesised
+                // accessor name (own + inherited).
+                let class_lc = c.name.to_ascii_lowercase();
+                let empty: Vec<String> = Vec::new();
+                let all_slots = class_slots.get(&class_lc).unwrap_or(&empty);
+                for (name, span) in super::lower_classes::class_synthesised_names(c, all_slots) {
+                    register(&name, span, &mut user_words)?;
+                }
+            }
+            Item::Generic(g) => {
+                register(&g.name, g.name_span, &mut user_words)?;
+            }
+            // Method extends an existing generic — same name, no
+            // separate registration.
+            Item::Method(_) => {}
+            // Raw Factor injection contributes no Forth-visible name.
+            Item::RawFactor(_) => {}
             Item::TopLevel { .. } => {}
         }
     }
@@ -492,20 +575,31 @@ pub fn resolve_with_prior(
         combined.insert(k.clone(), *v);
     }
 
+    // Combined VALUE-name lookup for TO resolution.  Prior + local.
+    let mut combined_values: HashMap<String, Span> = prior_value_names.clone();
+    for (k, v) in &local_value_names {
+        combined_values.insert(k.clone(), *v);
+    }
+
     // Pass 2: resolve every WordRef in every body and at top level.
     let mut word_targets: HashMap<Span, Target> = HashMap::new();
     for item in &prog.items {
         match item {
-            Item::Definition(d) => resolve_exprs(&d.body, &builtins, &combined, &mut word_targets)?,
-            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &combined, &mut word_targets)?,
+            Item::Definition(d) => resolve_exprs(&d.body, &builtins, &combined, &combined_values, &mut word_targets)?,
+            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &combined, &combined_values, &mut word_targets)?,
             // Computed-value CONSTANT/FCONSTANT bodies contain user-
             // visible word references (e.g. `3.5e 240e f/ FCONSTANT
             // mb-dx` references `f/`).  Resolve them too.  Literal-
             // valued constants have no body to walk.
             Item::Constant(c) => {
                 if let crate::compiler::ast::ConstValue::Computed(exprs) = &c.value {
-                    resolve_exprs(exprs, &builtins, &combined, &mut word_targets)?;
+                    resolve_exprs(exprs, &builtins, &combined, &combined_values, &mut word_targets)?;
                 }
+            }
+            // VALUE has an initial-value body — resolve any word
+            // references in there too.
+            Item::Value(v) => {
+                resolve_exprs(&v.initial, &builtins, &combined, &combined_values, &mut word_targets)?;
             }
             // Variable, Create, Collection carry no expressions to
             // resolve — their bodies are AST-level data, not user-
@@ -515,12 +609,20 @@ pub fn resolve_with_prior(
             // which may reference builtins.  Walk them so resolve
             // catches typos.
             Item::Template(t) => {
-                resolve_exprs(&t.constructor, &builtins, &combined, &mut word_targets)?;
-                resolve_exprs(&t.does_body,   &builtins, &combined, &mut word_targets)?;
+                resolve_exprs(&t.constructor, &builtins, &combined, &combined_values, &mut word_targets)?;
+                resolve_exprs(&t.does_body,   &builtins, &combined, &combined_values, &mut word_targets)?;
             }
             // Template instances inherit the resolved does_body
             // from their source template; no separate resolution.
             Item::TemplateInstance(_) => {}
+            // Class / Generic carry no Forth-side body.  Their
+            // slot/effect metadata is parsed at AST time and consumed
+            // by lower_classes / emit directly.
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
+            // Method body resolves like a `:` body — same rules.
+            Item::Method(m) => {
+                resolve_exprs(&m.body, &builtins, &combined, &combined_values, &mut word_targets)?;
+            }
         }
     }
 
@@ -533,6 +635,7 @@ fn resolve_exprs(
     exprs: &[Expr],
     builtins: &HashMap<&'static str, Target>,
     user_words: &HashMap<String, Span>,
+    value_names: &HashMap<String, Span>,
     out: &mut HashMap<Span, Target>,
 ) -> Result<(), ResolveError> {
     for e in exprs {
@@ -554,30 +657,42 @@ fn resolve_exprs(
                     });
                 }
             }
+            Expr::To { name, span } => {
+                let lc = name.to_ascii_lowercase();
+                if !value_names.contains_key(&lc) {
+                    return Err(ResolveError::ToNotValue {
+                        name: name.clone(),
+                        at: *span,
+                    });
+                }
+                // We don't insert into word_targets — emit derives
+                // the storage symbol from the name directly.  Resolve's
+                // job here is just the existence check.
+            }
             Expr::If { then_body, else_body, .. } => {
-                resolve_exprs(then_body, builtins, user_words, out)?;
+                resolve_exprs(then_body, builtins, user_words, value_names, out)?;
                 if let Some(eb) = else_body {
-                    resolve_exprs(eb, builtins, user_words, out)?;
+                    resolve_exprs(eb, builtins, user_words, value_names, out)?;
                 }
             }
             Expr::BeginUntil { body, .. } |
             Expr::BeginAgain { body, .. } => {
-                resolve_exprs(body, builtins, user_words, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, out)?;
             }
             Expr::BeginWhileRepeat { pred, body, .. } => {
-                resolve_exprs(pred, builtins, user_words, out)?;
-                resolve_exprs(body, builtins, user_words, out)?;
+                resolve_exprs(pred, builtins, user_words, value_names, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, out)?;
             }
             Expr::DoLoop { body, .. } => {
-                resolve_exprs(body, builtins, user_words, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, out)?;
             }
             Expr::Case { arms, default, .. } => {
                 for arm in arms {
-                    resolve_exprs(&arm.match_expr, builtins, user_words, out)?;
-                    resolve_exprs(&arm.body, builtins, user_words, out)?;
+                    resolve_exprs(&arm.match_expr, builtins, user_words, value_names, out)?;
+                    resolve_exprs(&arm.body, builtins, user_words, value_names, out)?;
                 }
                 if let Some(d) = default {
-                    resolve_exprs(d, builtins, user_words, out)?;
+                    resolve_exprs(d, builtins, user_words, value_names, out)?;
                 }
             }
             Expr::Tick { name, span } => {

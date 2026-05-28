@@ -1,6 +1,6 @@
 # IDE guide
 
-The FactorForth IDE is an MDI (multiple-document interface)
+The Factor4th IDE is an MDI (multiple-document interface)
 window hosting several pane types.  The frame is a single
 Direct2D surface — every pane renders into it via DirectWrite.
 

@@ -26,10 +26,48 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetForm {
-    pub inputs:  Vec<String>,
+    pub inputs:  Vec<LetInput>,
     pub outputs: Vec<String>,
     pub results: Vec<Expr>,
     pub wheres:  Vec<(String, Expr)>,
+}
+
+/// One position in a LET input list.  Either a plain name bound from
+/// the stack, or a name with a class annotation and a list of slot
+/// names to destructure into additional locals.  The destructure form
+/// is what makes LET-methods readable:
+///
+/// ```forth
+/// LET ( a:point as ax ay   b:point as bx by ) -> ( d ) =
+///     sqrt((bx - ax)^2 + (by - ay)^2)
+/// END
+/// ```
+///
+/// Each `name:class as slot1 slot2 ...` adds the top-level binding
+/// AND introduces one local per slot, computed at LET entry by calling
+/// the class's auto-generated getter (`class>slot`).  The body then
+/// uses plain `ax`, `ay`, etc., as if they were regular LET locals —
+/// no new syntactic convention inside the expression grammar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LetInput {
+    /// The top-level local name bound from the stack.
+    pub name: String,
+    /// If `Some((class, slots))`, the binding is also destructured:
+    /// after binding `name`, each `slot` becomes a local whose value
+    /// is `name class>slot`.
+    pub destructure: Option<DestructureClause>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DestructureClause {
+    pub class: String,
+    pub slots: Vec<String>,
+}
+
+impl LetInput {
+    pub fn plain(name: String) -> Self {
+        LetInput { name, destructure: None }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -53,7 +91,8 @@ enum Tok {
     LParen, RParen, Comma, Equals, Arrow,
     Plus, Minus, Star, Slash, StarStar,
     EqEq, NotEq, Less, Greater, LessEq, GreaterEq,
-    LetKw, EndKw, WhereKw,
+    Colon,
+    LetKw, EndKw, WhereKw, AsKw,
     Ident(String),
     Num(f64),
     Eof,
@@ -68,6 +107,14 @@ impl<'s> Lexer<'s> {
     fn new(src: &'s str) -> Self { Self { src: src.as_bytes(), pos: 0 } }
 
     fn skip_ws(&mut self) {
+        // Whitespace + `\` line comments only.  We DO NOT recognise
+        // Forth-style `( ... )` block comments inside LET — the
+        // parens are too important as the input/output list
+        // delimiters, and `( a b )` is the natural way to write a
+        // two-element list with breathing room.  Recognising it as
+        // a comment would silently eat the list and produce a
+        // baffling "expected LParen got Arrow" error.  Use `\`
+        // line comments if you need to annotate inside a LET block.
         loop {
             while self.pos < self.src.len() {
                 let c = self.src[self.pos];
@@ -85,17 +132,6 @@ impl<'s> Lexer<'s> {
                     }
                     continue;
                 }
-            }
-            if self.pos + 1 < self.src.len()
-                && self.src[self.pos] == b'('
-                && (self.src[self.pos + 1] == b' ' || self.src[self.pos + 1] == b'\t')
-            {
-                self.pos += 1;
-                while self.pos < self.src.len() && self.src[self.pos] != b')' {
-                    self.pos += 1;
-                }
-                if self.pos < self.src.len() { self.pos += 1; }
-                continue;
             }
             break;
         }
@@ -170,6 +206,10 @@ impl<'s> Lexer<'s> {
                 }
             }
             b'/' => { self.pos += 1; Ok((Tok::Slash, start)) }
+            b':' => { self.pos += 1; Ok((Tok::Colon, start)) }
+            // `^` is an alias for `**` — math users reach for it
+            // first.  Both produce the same Pow op at parse time.
+            b'^' => { self.pos += 1; Ok((Tok::StarStar, start)) }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let mut end = self.pos + 1;
                 while end < self.src.len() {
@@ -187,6 +227,7 @@ impl<'s> Lexer<'s> {
                 let tok = if word.eq_ignore_ascii_case("let")    { Tok::LetKw }
                     else if word.eq_ignore_ascii_case("end")     { Tok::EndKw }
                     else if word.eq_ignore_ascii_case("where")   { Tok::WhereKw }
+                    else if word.eq_ignore_ascii_case("as")      { Tok::AsKw }
                     else { Tok::Ident(word) };
                 Ok((tok, start))
             }
@@ -259,7 +300,8 @@ impl<'s> Parser<'s> {
         }
     }
 
-    fn ident_list(&mut self) -> Result<Vec<String>, LetError> {
+    /// Output list — plain identifiers, no destructuring.
+    fn output_list(&mut self) -> Result<Vec<String>, LetError> {
         self.expect(&Tok::LParen)?;
         let mut out = Vec::new();
         if self.cur.0 != Tok::RParen {
@@ -282,11 +324,74 @@ impl<'s> Parser<'s> {
         Ok(out)
     }
 
+    /// Input list — each entry is either a plain `name` or a
+    /// destructuring form `name:class as slot1 slot2 ...`.
+    /// Separators between entries can be commas, whitespace, or
+    /// both — `(a b c)`, `(a, b, c)`, and `(a:point as x y  b)` all
+    /// parse.  This is more Forth-natural than requiring commas
+    /// everywhere; only the destructure clause is whitespace-
+    /// sensitive (slot names after `as` end at the next non-Ident).
+    fn input_list(&mut self) -> Result<Vec<LetInput>, LetError> {
+        self.expect(&Tok::LParen)?;
+        let mut out = Vec::new();
+        loop {
+            // Skip optional commas (treat them like whitespace).
+            while self.cur.0 == Tok::Comma { self.bump()?; }
+            if self.cur.0 == Tok::RParen { break; }
+            let name = if let Tok::Ident(n) = &self.cur.0 {
+                let n = n.clone();
+                self.bump()?;
+                n
+            } else {
+                return Err(LetError {
+                    message: format!("expected identifier, got {:?}", self.cur.0),
+                    pos: self.cur.1,
+                });
+            };
+            // Optional destructure clause: `:class as slot1 slot2 ...`
+            let destructure = if self.cur.0 == Tok::Colon {
+                self.bump()?;
+                let class = if let Tok::Ident(c) = &self.cur.0 {
+                    let c = c.clone();
+                    self.bump()?;
+                    c
+                } else {
+                    return Err(LetError {
+                        message: format!("expected class name after `:`, got {:?}", self.cur.0),
+                        pos: self.cur.1,
+                    });
+                };
+                let mut slots = Vec::new();
+                if self.cur.0 == Tok::AsKw {
+                    self.bump()?;
+                    // Read slot names until we hit a non-Ident
+                    // (comma, rparen, etc.).
+                    while let Tok::Ident(s) = &self.cur.0 {
+                        slots.push(s.clone());
+                        self.bump()?;
+                    }
+                    if slots.is_empty() {
+                        return Err(LetError {
+                            message: "`as` requires at least one slot name".into(),
+                            pos: self.cur.1,
+                        });
+                    }
+                }
+                Some(DestructureClause { class, slots })
+            } else {
+                None
+            };
+            out.push(LetInput { name, destructure });
+        }
+        self.expect(&Tok::RParen)?;
+        Ok(out)
+    }
+
     fn parse_form(&mut self) -> Result<LetForm, LetError> {
         self.expect(&Tok::LetKw)?;
-        let inputs = self.ident_list()?;
+        let inputs = self.input_list()?;
         self.expect(&Tok::Arrow)?;
-        let outputs = self.ident_list()?;
+        let outputs = self.output_list()?;
         self.expect(&Tok::Equals)?;
         let mut results = Vec::new();
         loop {
@@ -455,11 +560,60 @@ mod tests {
     #[test]
     fn parses_minimal_let() {
         let f = p("LET (r) -> (a) = r END");
-        assert_eq!(f.inputs, vec!["r"]);
+        assert_eq!(f.inputs.len(), 1);
+        assert_eq!(f.inputs[0].name, "r");
+        assert!(f.inputs[0].destructure.is_none());
         assert_eq!(f.outputs, vec!["a"]);
         assert_eq!(f.results.len(), 1);
         assert!(f.wheres.is_empty());
     }
+
+    #[test]
+    fn parses_space_separated_inputs() {
+        let f = p("LET (a b) -> (c) = a + b END");
+        assert_eq!(f.inputs.len(), 2);
+        assert_eq!(f.inputs[0].name, "a");
+        assert_eq!(f.inputs[1].name, "b");
+    }
+
+    #[test]
+    fn parses_destructure_clause() {
+        let f = p("LET (p:point as x y) -> (m) = x + y END");
+        assert_eq!(f.inputs.len(), 1);
+        assert_eq!(f.inputs[0].name, "p");
+        let d = f.inputs[0].destructure.as_ref().unwrap();
+        assert_eq!(d.class, "point");
+        assert_eq!(d.slots, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn parses_destructure_and_plain_mixed() {
+        let f = p("LET (a:point as ax ay, b) -> (d) = ax + b END");
+        assert_eq!(f.inputs.len(), 2);
+        assert_eq!(f.inputs[0].name, "a");
+        let d0 = f.inputs[0].destructure.as_ref().unwrap();
+        assert_eq!(d0.slots, vec!["ax", "ay"]);
+        assert_eq!(f.inputs[1].name, "b");
+        assert!(f.inputs[1].destructure.is_none());
+    }
+
+    #[test]
+    fn parses_runtime_test_shape() {
+        // Exact text the runtime test would capture (with leading
+        // whitespace as it appears inside an indented method body).
+        let src = "LET ( a b ) -> ( c ) =\n                sqrt(a^2 + b^2)\n            END";
+        let f = parse(src).unwrap_or_else(|e| panic!("parse failed on indented LET: {e}"));
+        assert_eq!(f.inputs.len(), 2);
+    }
+
+    #[test]
+    fn parses_with_spaces_around_parens() {
+        // Same as parses_space_separated_inputs but WITH inner
+        // padding spaces.
+        let f = p("LET ( a b ) -> ( c ) = a END");
+        assert_eq!(f.inputs.len(), 2);
+    }
+
 
     #[test]
     fn parses_arithmetic_with_precedence() {

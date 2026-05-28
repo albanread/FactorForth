@@ -776,11 +776,48 @@ fn worker_main(
         // gives us — so GetProcAddress on it should find rt_*.
         // Listener architecture (mirrors Factor's stock listener).
         //
-        // Setup phase: register host library, install host streams.
+        // Setup phase: register host library, install host streams,
+        // and inject the type-introspection helpers (nf-typeof + the
+        // type-code constants + the boolean predicates).  These live
+        // in forth.runtime alongside the rest of our runtime words.
+        //
+        // We define them at session boot rather than baking into the
+        // shipped image because that lets us iterate without paying a
+        // full image-bootstrap cycle.  If we ever rebuild the image
+        // these definitions become persistent and the boot-time eval
+        // is a harmless redefinition (Factor accepts re-`:` of the
+        // same name with a warning we suppress).
+        //
+        // Type codes: small, stable integers picked so user code can
+        // CASE on them.  100s left for future tuple types.
         let setup = format!(
-            "USING: alien alien.libraries forth.runtime ;  \
+            "USING: alien alien.libraries forth.runtime kernel \
+                    math classes math.parser strings \
+                    quotations words combinators ;  \
              \"nf-host\" \"{exe}\" cdecl add-library  \
-             install-host-streams",
+             install-host-streams  \
+             IN: forth.runtime  \
+             CONSTANT: int-type     1  \
+             CONSTANT: float-type   2  \
+             CONSTANT: string-type  3  \
+             CONSTANT: xt-type      4  \
+             CONSTANT: addr-type    5  \
+             CONSTANT: other-type   99  \
+             : nf-typeof ( x -- code )  \
+                 {{  \
+                     {{ [ dup integer?   ] [ drop int-type    ] }}  \
+                     {{ [ dup float?     ] [ drop float-type  ] }}  \
+                     {{ [ dup string?    ] [ drop string-type ] }}  \
+                     {{ [ dup quotation? ] [ drop xt-type     ] }}  \
+                     {{ [ dup word?      ] [ drop xt-type     ] }}  \
+                     {{ [ dup nf-addr?   ] [ drop addr-type   ] }}  \
+                     [ drop other-type ]  \
+                 }} cond ;  \
+             : nf-int?     ( x -- f ) integer?      bool>flag ;  \
+             : nf-float?   ( x -- f ) float?        bool>flag ;  \
+             : nf-string?  ( x -- f ) string?       bool>flag ;  \
+             : nf-xt?      ( x -- f ) dup quotation? swap word? or bool>flag ;  \
+             : nf-addr-pred? ( x -- f ) nf-addr?    bool>flag ;",
             exe = exe_str,
         );
         trace("worker_main", "running setup eval");

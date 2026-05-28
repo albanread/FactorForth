@@ -2,7 +2,7 @@
 
 Every Forth word has a **stack effect** — what it pops and what
 it pushes.  Reading and writing effects is the single most
-useful Forth skill.  FactorForth's compiler checks effects at
+useful Forth skill.  Factor4th's compiler checks effects at
 compile time, so getting them wrong is a compile error, not a
 runtime mystery.
 
@@ -98,7 +98,7 @@ extra and produces nothing extra; only the surrounding
 ## Effect rows: `..a` and `..b`
 
 For words that pass through arbitrary stack values — like
-`call` or `execute` — FactorForth uses Factor's row-variable
+`call` or `execute` — Factor4th uses Factor's row-variable
 notation:
 
 ```

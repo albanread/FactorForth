@@ -7,7 +7,7 @@ then`.
 
 This tutorial covers everything you need to be productive.
 Skim if you've used Forth before; if not, type each example at
-the FactorForth prompt as you read.
+the Factor4th prompt as you read.
 
 ## 1. The data stack
 
@@ -196,7 +196,7 @@ Two flavours:
 hello, world!
 ```
 
-**`S$"` for managed string values** (FactorForth extension):
+**`S$"` for managed string values** (Factor4th extension):
 
 ```
 > S$" hello" $.
@@ -212,7 +212,7 @@ strings, which still exist if you need them.
 ## 9. LET algebra
 
 Forth's postfix is great for some things and a chore for others.
-Pure math reads better in infix.  FactorForth ships a LET DSL
+Pure math reads better in infix.  Factor4th ships a LET DSL
 that lets you write algebra naturally:
 
 ```
@@ -232,7 +232,7 @@ precedence rules.  The compiler lowers it to stack ops for you.
 
 - The IDE's Editor pane (Tools menu) lets you write multi-line
   programs without losing context.
-- `language-reference.md` lists every word FactorForth ships.
+- `language-reference.md` lists every word Factor4th ships.
 - `ide-guide.md` covers keyboard shortcuts.
 - Read other people's Forth code — *Starting Forth* by Leo Brodie
   is the classic introduction, freely available online.

@@ -24,6 +24,7 @@ pub mod emit;
 pub mod error;
 pub mod let_lang;
 pub mod lex;
+pub mod lower_classes;
 pub mod lower_exit;
 pub mod lower_qdup;
 pub mod lower_recurse;
@@ -42,7 +43,12 @@ pub use error::{CompileError, Pos, Span};
 pub use lex::{lex, NumBase, StringKind, Tok, Token};
 pub use parse::{parse, ParseError};
 pub use resolve::{resolve, ResolveError, Resolved, Target};
-pub use sema::{build as build_sema, build_with_prior as build_sema_with_prior, EscapeReason, EscapeState, Sema, UserWord};
+pub use sema::{
+    build as build_sema,
+    build_with_prior as build_sema_with_prior,
+    build_with_prior_and_templates as build_sema_with_prior_and_templates,
+    EscapeReason, EscapeState, Sema, UserWord,
+};
 
 /// Persistent state that carries across compiles in one interactive
 /// session.  When the user types `: square ... ;` in one eval and
@@ -73,6 +79,24 @@ pub struct CompileContext {
     /// patterns (`<n> tmplname <newname>`) so they expand to
     /// `Item::TemplateInstance` rather than a stray WordRef.
     pub templates: std::collections::BTreeMap<String, ast::TemplateDef>,
+    /// Lowercase VALUE name → first-definition span.  Used by
+    /// resolve to tell whether a `TO name` target is actually a
+    /// VALUE (vs. a regular word or a VARIABLE).  Carries only
+    /// the span, not the full ValueDef, because the runtime
+    /// storage symbol lives in Factor's image and follows from
+    /// the public name (`nf-value-<name>`) — no need to re-emit
+    /// the def on subsequent compiles.
+    pub values: std::collections::HashMap<String, error::Span>,
+
+    /// Lowercase class name → flat slot list (parent slots first,
+    /// then own).  Used cross-eval so a CLASS defined in eval N
+    /// is visible in eval N+1 — constructor stack effect sizing
+    /// and accessor lookup both depend on knowing the full slot
+    /// list.  Same persistence story as `templates` and `values`:
+    /// Factor's tuple-class is in the image, we just need to
+    /// remember enough metadata on our side to compile against
+    /// it from later evals.
+    pub classes: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl CompileContext {
@@ -139,11 +163,13 @@ pub fn compile_in_context_with_diagnostics(
 ) -> Result<(String, Vec<EffectError>), String> {
     let toks = lex(source).map_err(|e| e.to_string())?;
     let prog = parse(&toks).map_err(|e| e.to_string())?;
-    let mut sema = sema::build_with_prior_and_templates(
+    let mut sema = sema::build_with_prior_state(
         prog,
         &ctx.user_words,
         &ctx.user_effects,
         &ctx.templates,
+        &ctx.values,
+        &ctx.classes,
     ).map_err(|e| e.to_string())?;
 
     // Force every variable in this compile to Wide.  The Narrow
@@ -186,6 +212,16 @@ pub fn compile_in_context_with_diagnostics(
     }
     for (name, tmpl) in &sema.templates {
         ctx.templates.insert(name.clone(), tmpl.clone());
+    }
+    for (name, vdef) in &sema.values {
+        ctx.values.insert(name.clone(), vdef.name_span);
+    }
+    // Merge class metadata so later evals can use the constructor
+    // and accessors.  `sema.class_slots` is keyed by lowercased
+    // class name and holds the FLATTENED slot list — exactly what
+    // build_with_prior_state's `prior_classes` parameter wants.
+    for (name, slots) in &sema.class_slots {
+        ctx.classes.insert(name.clone(), slots.clone());
     }
     Ok((ir, warnings))
 }

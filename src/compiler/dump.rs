@@ -159,6 +159,47 @@ fn write_item(out: &mut String, item: &Item, depth: usize) {
                              ti.name, ti.template_name, ti.allocated_bytes,
                              span_str(&ti.span));
         }
+        Item::Value(v) => {
+            let _ = writeln!(out, "{indent}Value `{}` ({} init expr{}) @ {}",
+                             v.name, v.initial.len(),
+                             if v.initial.len() == 1 { "" } else { "s" },
+                             span_str(&v.span));
+            for e in &v.initial { write_expr(out, e, depth + 1); }
+        }
+        Item::Class(c) => {
+            let _ = writeln!(out, "{indent}Class `{}`{}{} ({} slot{}) @ {}",
+                             c.name,
+                             if c.extends.is_some() { " EXTENDS " } else { "" },
+                             c.extends.as_deref().unwrap_or(""),
+                             c.slots.len(),
+                             if c.slots.len() == 1 { "" } else { "s" },
+                             span_str(&c.span));
+        }
+        Item::Generic(g) => {
+            let _ = writeln!(out, "{indent}Generic `{}` ( {} -- {} ) @ {}",
+                             g.name,
+                             g.effect.inputs.join(" "),
+                             g.effect.outputs.join(" "),
+                             span_str(&g.span));
+        }
+        Item::Method(m) => {
+            let specs: Vec<String> = m.specializers.iter()
+                .map(|s| format!("{}:{}", s.param_name, s.class_name))
+                .collect();
+            let _ = writeln!(out, "{indent}Method `{}` [{}] ({} body expr{}) @ {}",
+                             m.generic_name, specs.join(", "),
+                             m.body.len(),
+                             if m.body.len() == 1 { "" } else { "s" },
+                             span_str(&m.span));
+            for e in &m.body { write_expr(out, e, depth + 1); }
+        }
+        Item::RawFactor(r) => {
+            let preview: String = r.source.chars().take(40).collect();
+            let _ = writeln!(out, "{indent}RawFactor `{}{}` @ {}",
+                             preview,
+                             if r.source.len() > 40 { "…" } else { "" },
+                             span_str(&r.span));
+        }
     }
 }
 
@@ -220,6 +261,9 @@ fn write_expr(out: &mut String, e: &Expr, depth: usize) {
         }
         Expr::Tick { name, span } => {
             let _ = writeln!(out, "{indent}Tick `{name}` @ {}", span_str(span));
+        }
+        Expr::To { name, span } => {
+            let _ = writeln!(out, "{indent}To `{name}` @ {}", span_str(span));
         }
         Expr::LetForm { form, span } => {
             let _ = writeln!(out, "{indent}LetForm @ {}", span_str(span));

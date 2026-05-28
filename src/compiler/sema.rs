@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::ast::{
     CollectionDef, ConstantDef, CreateDef, Expr, Item, Literal, Program,
-    TemplateDef, TemplateInstanceDef, VariableDef,
+    TemplateDef, TemplateInstanceDef, ValueDef, VariableDef,
 };
 use super::error::Pos;
 use super::effect::{infer_with_prior, Effect, EffectError};
@@ -130,6 +130,22 @@ pub struct Sema {
     /// TopLevels and replaces those triples with TemplateInstance
     /// items.
     pub templates: BTreeMap<String, TemplateDef>,
+    /// Lowercase VALUE name → full ValueDef.  Mirrors `variables` /
+    /// `constants` / `templates`.  Used by emit (to seed the storage
+    /// symbol and emit the reader word) and exposed to callers so
+    /// they can merge new VALUE names into a persistent
+    /// `CompileContext.values` for cross-eval TO resolution.
+    pub values: BTreeMap<String, ValueDef>,
+
+    /// Lowercase class name → flattened slot list (parent slots
+    /// first, then own slots).  Used by emit to size constructors
+    /// correctly and to emit accessors for every slot a class
+    /// instance has, not just the ones declared on this class.
+    ///
+    /// Populated by `lower_classes::compute_class_slots` at sema
+    /// build time.  Cross-eval class persistence (sprint 2) will
+    /// extend this with prior_classes from the CompileContext.
+    pub class_slots: HashMap<String, Vec<String>>,
 
     // ── From effect ──────────────────────────────────────────────
     /// Callers' view of a word's effect: declared if present, else
@@ -188,6 +204,28 @@ pub fn build_with_prior_and_templates(
     prior_effects: &HashMap<String, Effect>,
     prior_templates: &BTreeMap<String, TemplateDef>,
 ) -> Result<Sema, ResolveError> {
+    let empty_values = HashMap::new();
+    let empty_classes = HashMap::new();
+    build_with_prior_state(
+        program, prior_user_words, prior_effects, prior_templates,
+        &empty_values, &empty_classes,
+    )
+}
+
+/// As above, plus VALUE names and class slot-lists carried over
+/// from prior compiles.  `TO` targets that aren't in either this
+/// compile's VALUE items or `prior_values` are rejected with
+/// `ToNotValue`.  Class constructors and accessors referenced from
+/// this compile can resolve against names declared in
+/// `prior_classes` even when the `CLASS:` itself isn't redeclared.
+pub fn build_with_prior_state(
+    program: Program,
+    prior_user_words: &HashMap<String, Span>,
+    prior_effects: &HashMap<String, Effect>,
+    prior_templates: &BTreeMap<String, TemplateDef>,
+    prior_values: &HashMap<String, Span>,
+    prior_classes: &HashMap<String, Vec<String>>,
+) -> Result<Sema, ResolveError> {
     // Template expansion runs BEFORE resolve.  Each `<n>
     // templatename <newname>` triple in TopLevel becomes an
     // Item::TemplateInstance.  resolve then sees a normal
@@ -218,7 +256,20 @@ pub fn build_with_prior_and_templates(
         });
     }
 
-    let mut resolved = resolve_with_prior(program, prior_user_words)?;
+    // Compute the flattened slot list per class BEFORE resolve so
+    // resolve can register the right number of accessor names.
+    // Prior-compile classes are folded in so cross-eval inheritance
+    // and accessor reuse Just Work — a class defined in eval N
+    // contributes its slot list, and eval N+1's `<oldname>` /
+    // `oldname>slot` / `slot>>oldname` resolve correctly.
+    let class_slots = super::lower_classes::compute_class_slots(
+        &program,
+        prior_classes,
+    );
+
+    let mut resolved = super::resolve::resolve_with_prior_and_values_and_classes(
+        program, prior_user_words, prior_values, &class_slots,
+    )?;
 
     // ── lower_exit ───────────────────────────────────────────────
     // Rewrite ANS EXIT into structured tail-inlining before any
@@ -243,7 +294,40 @@ pub fn build_with_prior_and_templates(
         }
     }
 
-    let (inferred, effect_errors) = infer_with_prior(&resolved, prior_effects);
+    let (mut inferred, effect_errors) = infer_with_prior(&resolved, prior_effects);
+
+    // Seed user_effects with the per-class synthesised words.
+    // These have concrete known effects derivable from slot count,
+    // but effect.rs doesn't have access to the slot map — sema does.
+    // Without this seeding, eval N+1's `5 6 <oldpoint>` call would
+    // see the constructor as Effect::Unknown and Factor would refuse
+    // the IR.
+    for item in &resolved.program.items {
+        if let Item::Class(c) = item {
+            let class_lc = c.name.to_ascii_lowercase();
+            let empty: Vec<String> = Vec::new();
+            let all_slots = class_slots.get(&class_lc).unwrap_or(&empty);
+            let n_slots = all_slots.len() as u32;
+            inferred.user_effects.insert(
+                format!("<{class_lc}>"),
+                Effect::known(n_slots, 1),
+            );
+            for s in all_slots {
+                inferred.user_effects.insert(
+                    format!("{class_lc}>{s}"),
+                    Effect::known(1, 1),
+                );
+                inferred.user_effects.insert(
+                    format!("{s}>>{class_lc}"),
+                    Effect::known(2, 1),
+                );
+                inferred.user_effects.insert(
+                    format!("{class_lc}.{s}!"),
+                    Effect::known(2, 0),
+                );
+            }
+        }
+    }
 
     // Lift the resolve UserWord-equivalent (just name + span) into our
     // richer UserWord with declared effect counts.
@@ -270,6 +354,25 @@ pub fn build_with_prior_and_templates(
             Item::Collection(cl)       => (cl.name.clone(), cl.name_span, None, None),
             Item::Template(t)          => (t.name.clone(), t.name_span, None, None),
             Item::TemplateInstance(ti) => (ti.name.clone(), ti.name_span, None, None),
+            // VALUE emits as `: name ( -- v ) ... ;` so callers see
+            // it like a `:` def with effect (0, 1).  Record it
+            // with that declared shape so cross-compile inference
+            // doesn't fall back to Unknown.
+            Item::Value(v)             => (v.name.clone(), v.name_span, Some(0), Some(1)),
+            // Class registers its own name as (0, 0) — bare class-name
+            // references don't produce stack effects.  Constructor and
+            // accessor synth names are registered separately below.
+            Item::Class(c)             => (c.name.clone(), c.name_span, Some(0), Some(0)),
+            // Generic name carries its declared effect.
+            Item::Generic(g) => (
+                g.name.clone(), g.name_span,
+                Some(g.effect.inputs.len() as u32),
+                Some(g.effect.outputs.len() as u32),
+            ),
+            // Method extends an existing generic; no separate name.
+            Item::Method(_)            => continue,
+            // Raw Factor injection: no Forth-visible name.
+            Item::RawFactor(_)         => continue,
             Item::TopLevel { .. }      => continue,
         };
         user_words.insert(
@@ -283,6 +386,57 @@ pub fn build_with_prior_and_templates(
         );
     }
 
+    // For every class declared in this compile, ALSO register the
+    // synthesised constructor and accessor names in user_words
+    // (and seed user_effects below).  Without this, the names
+    // resolve fine THIS compile (resolve pass 1 inserts them into
+    // its own user_words map) but they don't propagate to
+    // CompileContext.user_words for the next eval — which means
+    // `<point>` defined in eval N is invisible to eval N+1.
+    //
+    // For each class, all synth names are derived from the FLAT
+    // slot list (parent + own).  Effects:
+    //   <classname>           : (n_slots, 1)
+    //   classname>slot        : (1, 1)
+    //   slot>>classname       : (2, 1)
+    //   classname.slot!       : (2, 0)
+    for item in &resolved.program.items {
+        if let Item::Class(c) = item {
+            let class_lc = c.name.to_ascii_lowercase();
+            let empty: Vec<String> = Vec::new();
+            let all_slots = class_slots.get(&class_lc).unwrap_or(&empty);
+            let n_slots = all_slots.len() as u32;
+            // Constructor: <classname>
+            user_words.entry(format!("<{class_lc}>")).or_insert(UserWord {
+                name: format!("<{}>", c.name),
+                def_span: c.name_span,
+                declared_inputs:  Some(n_slots),
+                declared_outputs: Some(1),
+            });
+            // Per-slot accessors.
+            for s in all_slots {
+                user_words.entry(format!("{class_lc}>{s}")).or_insert(UserWord {
+                    name: format!("{}>{s}", c.name),
+                    def_span: c.name_span,
+                    declared_inputs:  Some(1),
+                    declared_outputs: Some(1),
+                });
+                user_words.entry(format!("{s}>>{class_lc}")).or_insert(UserWord {
+                    name: format!("{s}>>{}", c.name),
+                    def_span: c.name_span,
+                    declared_inputs:  Some(2),
+                    declared_outputs: Some(1),
+                });
+                user_words.entry(format!("{class_lc}.{s}!")).or_insert(UserWord {
+                    name: format!("{}.{s}!", c.name),
+                    def_span: c.name_span,
+                    declared_inputs:  Some(2),
+                    declared_outputs: Some(0),
+                });
+            }
+        }
+    }
+
     // Collect variables, constants, and CREATE'd buffers into
     // their own tables.
     let mut variables: BTreeMap<String, VariableDef> = BTreeMap::new();
@@ -290,6 +444,7 @@ pub fn build_with_prior_and_templates(
     let mut creates:   BTreeMap<String, CreateDef>   = BTreeMap::new();
     let mut collections: BTreeMap<String, CollectionDef> = BTreeMap::new();
     let mut templates: BTreeMap<String, TemplateDef> = BTreeMap::new();
+    let mut values:    BTreeMap<String, ValueDef>    = BTreeMap::new();
     for item in &resolved.program.items {
         match item {
             Item::Variable(v) => {
@@ -307,6 +462,9 @@ pub fn build_with_prior_and_templates(
             Item::Template(t) => {
                 templates.insert(t.name.to_ascii_lowercase(), t.clone());
             }
+            Item::Value(v) => {
+                values.insert(v.name.to_ascii_lowercase(), v.clone());
+            }
             _ => {}
         }
     }
@@ -320,6 +478,8 @@ pub fn build_with_prior_and_templates(
         creates,
         collections,
         templates,
+        values,
+        class_slots,
         user_effects: inferred.user_effects,
         body_effects: inferred.body_effects,
         effect_errors,
@@ -495,6 +655,10 @@ fn analyse_call_graph(sema: &mut Sema) {
             // Variable, Create, Collection carry no expressions
             // to walk.
             Item::Variable(_) | Item::Create(_) | Item::Collection(_) => {}
+            // VALUE initial-body may reference user words.
+            Item::Value(v) => {
+                walk_body_for_refs(&v.initial, None, sema);
+            }
             // Templates carry constructor + does_body; instances
             // carry their captured does_body.
             Item::Template(t) => {
@@ -506,6 +670,13 @@ fn analyse_call_graph(sema: &mut Sema) {
                 let lc = ti.name.to_ascii_lowercase();
                 walk_body_for_refs(&ti.does_body, Some(&lc), sema);
             }
+            // Method body — caller is the generic name.
+            Item::Method(m) => {
+                let lc = m.generic_name.to_ascii_lowercase();
+                walk_body_for_refs(&m.body, Some(&lc), sema);
+            }
+            // Class / Generic / RawFactor have no Forth-side body.
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
         }
     }
 }
@@ -558,6 +729,9 @@ pub fn analyse_escape(sema: &mut Sema) {
                 }
             }
             Item::Variable(_) | Item::Create(_) | Item::Collection(_) => {}
+            Item::Value(v) => {
+                walk_block_for_escape(&v.initial, &var_names, sema);
+            }
             Item::Template(t) => {
                 walk_block_for_escape(&t.constructor, &var_names, sema);
                 walk_block_for_escape(&t.does_body,   &var_names, sema);
@@ -565,6 +739,10 @@ pub fn analyse_escape(sema: &mut Sema) {
             Item::TemplateInstance(ti) => {
                 walk_block_for_escape(&ti.does_body, &var_names, sema);
             }
+            Item::Method(m) => {
+                walk_block_for_escape(&m.body, &var_names, sema);
+            }
+            Item::Class(_) | Item::Generic(_) | Item::RawFactor(_) => {}
         }
     }
 }
@@ -674,6 +852,19 @@ fn walk_body_for_refs(exprs: &[Expr], caller: Option<&str>, sema: &mut Sema) {
                 // ' name pushes the XT — same as referencing the
                 // name's xt, so record it as a use site (it ties
                 // the target word into the call graph).
+                let lc = name.to_ascii_lowercase();
+                sema.use_sites.entry(lc.clone()).or_default().push(*span);
+                if let Some(c) = caller {
+                    sema.call_graph
+                        .entry(c.to_string())
+                        .or_default()
+                        .insert(lc);
+                }
+            }
+            Expr::To { name, span } => {
+                // `TO name` is a write to the VALUE — count it as a
+                // use site so dead-code analysis sees the dependency,
+                // and link it to the caller's call graph.
                 let lc = name.to_ascii_lowercase();
                 sema.use_sites.entry(lc.clone()).or_default().push(*span);
                 if let Some(c) = caller {
