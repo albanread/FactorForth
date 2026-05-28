@@ -1,14 +1,18 @@
-# Factor4th Standard Class Library — design
+# Factor4th CoreProtocols — design
 
-Status: **design / not yet built.**  This document proposes a
-class-based standard framework layered on Factor4th's CLOS-flavoured
-object system (see `object-system.md`).  It is driven by concrete toy
-programs rather than abstract taxonomy — the scenarios pull each layer
-into existence, and we build bottom-up, shipping a runnable toy at the
-end of each phase.
+Status: **design / not yet built.**  This document proposes
+**CoreProtocols**, a standard framework layered on Factor4th's
+CLOS-flavoured object system (see `object-system.md`).  It is driven
+by concrete toy programs rather than abstract taxonomy — the scenarios
+pull each layer into existence, and we build bottom-up, shipping a
+runnable toy at the end of each phase.
 
-Working name: **`4cl`** (the Factor4th class library).  Bikeshed
-later; this doc just needs a handle.
+The name is the thesis: the unit of design is the **protocol** (a
+named set of generic functions), not a class hierarchy.  We
+deliberately did **not** call it a "class library" — that framing
+belongs to message-passing systems where behaviour hangs off a
+receiver.  Here the classes are incidental; the protocols are the
+product.
 
 ---
 
@@ -389,8 +393,10 @@ library has done its job.
 
 ## 7. Open questions to settle before Phase 1
 
-1. **Name.**  `4cl`?  `stdclasses`?  Something thematic?  (Low stakes,
-   but it threads through every vocab/file name.)
+1. **Name.**  ✅ Settled: **CoreProtocols**.  Vocab/file naming
+   follows from it — e.g. Forth source under a `core-protocols/`
+   tree, layer vocabs like `core.seq`, `core.stream`, `core.gui`
+   (final spelling TBD when the first file lands).
 2. **`grid` indexing convention** — `(x,y)` vs `(row,col)`, 0- vs
    1-based.  Pick once, document loudly.
 3. **`equals?` and `hash` contract** — needed together for `dict`/`set`
