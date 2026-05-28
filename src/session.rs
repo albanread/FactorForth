@@ -669,7 +669,7 @@ struct NfApi<'lib> {
 /// Helpers are prefixed `(nf-...)` by convention for "implementation
 /// detail, not a user word."
 const TOOLS_SETUP_SRC: &str = r#"
-USING: kernel math math.parser sequences strings byte-arrays
+USING: kernel math math.parser sequences arrays strings byte-arrays
        io classes words quotations vocabs grouping namespaces
        accessors combinators prettyprint.config forth.runtime ;
 IN: forth.runtime
@@ -745,6 +745,16 @@ IN: forth.runtime
 
 : nf-words ( -- )
     "scratchpad" vocab-words [ name>> print ] each ;
+
+! ── CoreProtocols Layer 1: mutable fixed-cell store ──────────────
+! A grid / vector holds its elements in a Factor fixed array (fixed
+! length, settable elements) tucked into a slot.  These three wrap
+! Factor's <array> / nth / set-nth so the ANS-Forth surface can
+! allocate and index that store without seeing Factor.  Exposed as
+! <cells> / cells@ / cells! by the resolver.
+: nf-cells-new ( n -- seq ) 0 <array> ;        ! n zeros
+: nf-cells-at  ( seq i -- x ) swap nth ;
+: nf-cells-set ( x seq i -- ) swap set-nth ;
 "#;
 
 fn worker_main(

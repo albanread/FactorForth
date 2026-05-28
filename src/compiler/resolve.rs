@@ -408,6 +408,14 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("words",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-words"       }),
         ("dump",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-dump"        }),
 
+        // CoreProtocols Layer 1 — mutable fixed-cell store backing
+        // `grid` / `vector`.  A fixed-length Factor array with
+        // settable elements, held in a slot.  `<cells>` allocates n
+        // zeroed cells; `cells@`/`cells!` index it (0-based).
+        ("<cells>",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-cells-new"   }),
+        ("cells@",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-cells-at"    }),
+        ("cells!",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-cells-set"   }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

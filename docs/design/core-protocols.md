@@ -612,10 +612,10 @@ library has done its job.
    throw; outcomes are objects.  (Needs ANS `THROW`/`CATCH` wired in
    the runtime — verify before Phase 1; tracked as a task.)
 
-4. **`grid` indexing convention** — `(x,y)` vs `(row,col)`, 0- vs
-   1-based.  Lean `(x,y)` 0-based to match graphics/canvas
-   coordinates (Phase 4 reuses the same convention).  Confirm and
-   document loudly.
+4. **`grid` indexing convention** — ✅ Settled: **0-based, addressed
+   `(x, y)`** (column then row), row-major (`index = y*w + x`).
+   Matches canvas coordinates so the grid and the GUI layer agree.
+   Shipped in `lib/collections.f`.
 
 5. **`equals?` / `hash` contract** — needed together for `dict`/`set`
    keys.  Decide whether value classes auto-derive both from their

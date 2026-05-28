@@ -10,9 +10,10 @@ use std::sync::{Arc, Mutex};
 use newfactor::compiler::{compile_in_context, CompileContext};
 use newfactor::session::{IoMode, Session, SessionOpts};
 
-/// Layer 0 source, embedded from the shipped library file so the test
-/// and the release artifact never drift.
+/// Library source, embedded from the shipped files so the tests and
+/// the release artifacts never drift.
 const CORE: &str = include_str!("../release/factorforth/lib/core.f");
+const COLLECTIONS: &str = include_str!("../release/factorforth/lib/collections.f");
 
 fn fresh() -> (Session, Arc<Mutex<Vec<u8>>>, CompileContext) {
     let out = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -90,4 +91,59 @@ fn show_ln_reuses_the_protocol() {
     assert!(cap.contains("#5"), "tag1: {cap}");
     assert!(cap.contains("#9"), "tag2: {cap}");
     assert_eq!(cap.matches('#').count(), 2, "two shows: {cap}");
+}
+
+// ── Layer 1: grid ───────────────────────────────────────────────
+
+/// A grid stores and retrieves cells by (x, y), 0-based.  Write a
+/// few cells, read them back.
+#[test]
+#[ignore]
+fn grid_stores_and_reads_by_xy() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        \ a 3-wide, 2-tall grid, held in a VALUE for clean access
+        3 2 new-grid VALUE board
+
+        \ set (0,0)=11, (2,0)=22, (1,1)=33
+        11  0 0 board at-xy!
+        22  2 0 board at-xy!
+        33  1 1 board at-xy!
+
+        \ read them back, in order
+        0 0 board at-xy .
+        2 0 board at-xy .
+        1 1 board at-xy .
+        \ an untouched cell reads 0
+        1 0 board at-xy .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("11 ") && cap.contains("22 ") && cap.contains("33 "),
+        "stored cells read back: {cap}");
+    // the four `.` outputs, in order: 11 22 33 0
+    assert!(cap.contains("11 22 33 0"), "in (x,y) order incl untouched=0: {cap}");
+}
+
+/// in-bounds? is 0-based and (x,y): valid columns are 0..w, rows
+/// 0..h; negatives and over-edge are out.
+#[test]
+#[ignore]
+fn grid_in_bounds_is_zero_based_xy() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        3 2 new-grid          \ x in 0..2, y in 0..1
+
+        dup 0 0 rot in-bounds? .   \ -1  (origin, in)
+        dup 2 1 rot in-bounds? .   \ -1  (far corner, in)
+        dup 3 0 rot in-bounds? .   \  0  (x == w, out)
+        dup 0 2 rot in-bounds? .   \  0  (y == h, out)
+        -1 0 rot in-bounds? .      \  0  (negative x, out)
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    // -1 -1 0 0 0  (ANS true is -1, false is 0)
+    assert!(cap.contains("-1 -1 0 0 0"), "bounds flags: {cap}");
 }

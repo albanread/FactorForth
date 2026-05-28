@@ -354,6 +354,11 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("words", e(0, 0));   // -- (list user definitions)
     m.insert("dump",  e(1, 1));   // x -- x (inspect TOS, leaves it)
 
+    // ── CoreProtocols Layer 1 — cell store ────────────────────────
+    m.insert("<cells>", e(1, 1)); // n -- seq
+    m.insert("cells@",  e(2, 1)); // seq i -- x
+    m.insert("cells!",  e(3, 0)); // x seq i --
+
     m
 }
 
