@@ -287,6 +287,27 @@ fn filter_keeps_matching_elements() {
     assert!(cap.contains("vals: 2 4 6"), "filter kept the evens: {cap}");
 }
 
+/// `fold` threads an accumulator through every element.  It's the
+/// general reducer: sum is `0 ' + fold`.  Ticked builtins (`+`) work
+/// as the two-in/one-out xt via call2>.
+#[test]
+#[ignore]
+fn fold_reduces_with_an_accumulator() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push  4 xs d-push
+        ." sum=" xs 0 ' + fold .       \ 1+2+3+4 = 10
+        \ left-to-right order matters: start at 100, subtract each
+        ." sub=" xs 100 ' - fold .     \ ((((100-1)-2)-3)-4) = 90
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sum=10"), "fold sum: {cap}");
+    assert!(cap.contains("sub=90"), "fold is left-to-right: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the

@@ -774,6 +774,8 @@ IN: forth.runtime
 : nf-call1 ( x xt -- ) call( x -- ) ;
 ! Transforming call: one in, one out — for map/find-style algorithms.
 : nf-call1> ( x xt -- y ) call( x -- y ) ;
+! Two-in/one-out call — for fold/reduce: xt is ( acc x -- acc ).
+: nf-call2> ( a b xt -- y ) call( a b -- y ) ;
 "#;
 
 fn worker_main(

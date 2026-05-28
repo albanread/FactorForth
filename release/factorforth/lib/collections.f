@@ -124,3 +124,20 @@ METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
         if filt-dst d-push else drop then
     loop
     filt-dst ;
+
+\ `fold ( c init xt -- acc )` threads an accumulator through every
+\ element, left to right: acc starts at init, and for each element
+\ xt ( acc x -- acc ) folds it in.  This is the general reducer the
+\ other algorithms specialise — sum is `0 ' + fold`, and so on.
+\ (Held in VALUEs across the loop, like each/map/filter.  call2> is
+\ the two-in/one-out effect-annotated call that keeps the DO loop
+\ inferable.)
+0 VALUE fold-c
+0 VALUE fold-xt
+0 VALUE fold-acc
+: fold ( c init xt -- acc )
+    TO fold-xt  TO fold-acc  TO fold-c
+    fold-c size 0 do
+        fold-acc  i fold-c at  fold-xt call2>  TO fold-acc
+    loop
+    fold-acc ;

@@ -425,6 +425,7 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         // Effect-annotated 1-in/0-out xt call — makes `each` inferable.
         ("call1",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1"       }),
         ("call1>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1>"      }),
+        ("call2>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call2>"      }),
 
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),

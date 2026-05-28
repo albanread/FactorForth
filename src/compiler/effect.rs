@@ -367,6 +367,7 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("rawvec-set",  e(3, 0)); // x i v --
     m.insert("call1",       e(2, 0)); // x xt --
     m.insert("call1>",      e(2, 1)); // x xt -- y
+    m.insert("call2>",      e(3, 1)); // a b xt -- y
 
     m
 }
