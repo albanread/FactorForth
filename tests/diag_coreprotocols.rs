@@ -196,6 +196,52 @@ fn collection_protocol_is_polymorphic() {
     assert!(cap.contains("6 2"), "polymorphic size over grid + darray: {cap}");
 }
 
+/// `each` runs an xt over every element — defined once over the
+/// protocol, so it works on a darray and a grid alike.  Here the xt
+/// is the builtin `.` (print), gathered with `'`.
+#[test]
+#[ignore]
+fn each_iterates_any_collection() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        2 xs d-push  3 xs d-push  4 xs d-push
+        ." darray: " xs ' . each cr
+
+        \ each also walks a grid's cells in linear (row-major) order
+        2 2 new-grid VALUE g
+        7  0 0 g at-xy!          \ only (0,0) is non-zero
+        ." grid: " g ' . each cr
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    // darray elements in push order
+    assert!(cap.contains("darray: 2 3 4"), "each over darray: {cap}");
+    // grid cells linear: (0,0)=7 then three zeros
+    assert!(cap.contains("grid: 7 0 0 0"), "each over grid cells: {cap}");
+}
+
+/// `each` composes with user accumulators too (xt defined in an
+/// earlier eval, so it's in the dictionary when ticked — see the
+/// same-compile tick-ordering note).
+#[test]
+#[ignore]
+fn each_with_user_accumulator() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, "0 VALUE acc  : add-acc ( n -- ) acc + TO acc ;");
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        2 xs d-push  3 xs d-push  4 xs d-push
+        xs ' add-acc each
+        ." sum=" acc .          \ 9
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sum=9"), "each + accumulator: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the

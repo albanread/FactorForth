@@ -422,6 +422,8 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("rawvec-len", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-len"  }),
         ("rawvec-at",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-at"   }),
         ("rawvec-set", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-set"  }),
+        // Effect-annotated 1-in/0-out xt call — makes `each` inferable.
+        ("call1",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1"       }),
 
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),

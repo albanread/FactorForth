@@ -766,6 +766,12 @@ IN: forth.runtime
 : nf-rawvec-len  ( v -- n )   length ;
 : nf-rawvec-at   ( i v -- x ) nth ;
 : nf-rawvec-set  ( x i v -- ) set-nth ;
+
+! Call a one-in/zero-out xt on a value.  The effect-annotated
+! `call( x -- )` is what makes `each` inferable: a bare `execute` of
+! a runtime xt has unknown effect, so Factor can't type-check the
+! enclosing loop.  Exposed as `call1` for collection algorithms.
+: nf-call1 ( x xt -- ) call( x -- ) ;
 "#;
 
 fn worker_main(

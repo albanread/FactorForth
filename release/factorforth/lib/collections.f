@@ -77,3 +77,21 @@ METHOD: at!  ( x i g:grid -- )  grid>cells swap cells! ;
 METHOD: size ( d:darray -- n )    darray>data rawvec-len ;
 METHOD: at   ( i d:darray -- x )  darray>data rawvec-at ;
 METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
+
+\ ── Algorithms over the protocol ─────────────────────────────────
+\
+\ Written ONCE against size/at — they work on any collection that
+\ implements them (grid, darray, and anything you add later).  This
+\ is the payoff of the protocol: no per-class iteration code.
+\
+\ `each ( c xt -- )` runs xt once per element (the element on the
+\ stack).  xt is an execution token — get one with `'`:  xs ' . each
+\ prints every element.  (Held in VALUEs across the loop so the
+\ collection and token read cleanly; single-threaded, like the rest.)
+0 VALUE each-c
+0 VALUE each-xt
+: each ( c xt -- )
+    TO each-xt  TO each-c
+    each-c size 0 do
+        i each-c at  each-xt call1
+    loop ;
