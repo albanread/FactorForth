@@ -78,6 +78,23 @@ METHOD: size ( d:darray -- n )    darray>data rawvec-len ;
 METHOD: at   ( i d:darray -- x )  darray>data rawvec-at ;
 METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
 
+\ `new-like ( c -- d )` — a fresh, empty collection of c's OWN type,
+\ shaped to hold c's elements: a result you fill by linear index with
+\ at!.  This is what lets `map` preserve type — a grid maps to a grid,
+\ a darray to a darray.  Extend it for any class you add.
+\
+\ Like the size/at methods, these bodies use only the auto-generated
+\ boa constructors (<grid> / <darray>) and accessors, never a `:` word
+\ defined later in this file.
+\   * grid  — same w*h, freshly zeroed (every index already writable).
+\   * darray — empty; its at! (set-nth) grows the backing as you write,
+\     so writing indices 0..size-1 in order fills it to the right length.
+GENERIC: new-like ( c -- d )
+METHOD: new-like ( g:grid -- d )
+    dup grid>w swap grid>h 2dup * <cells> <grid> ;
+METHOD: new-like ( d:darray -- e )
+    drop <rawvec> <darray> ;
+
 \ ── Algorithms over the protocol ─────────────────────────────────
 \
 \ Written ONCE against size/at — they work on any collection that
@@ -97,16 +114,19 @@ METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
     loop ;
 
 \ `map ( c xt -- d )` applies xt ( x -- y ) to every element and
-\ collects the results into a fresh darray (any input collection,
-\ darray result — a type-preserving `map` waits on a `like` protocol).
+\ collects the results into a fresh collection of the SAME type as the
+\ input — a grid maps to a grid, a darray to a darray.  The result is
+\ built by `new-like` and filled by linear index, so the shape (a
+\ grid's w*h, a darray's length) is preserved.
 0 VALUE map-c
 0 VALUE map-xt
 0 VALUE map-dst
 : map ( c xt -- d )
     TO map-xt  TO map-c
-    new-darray TO map-dst
-    map-c size 0 do
-        i map-c at  map-xt call1>  map-dst d-push
+    map-c new-like TO map-dst
+    map-c size 0 ?do
+        i map-c at  map-xt call1>    \ y
+        i map-dst at!                \ write at the same linear index
     loop
     map-dst ;
 

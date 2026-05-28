@@ -236,6 +236,30 @@ The cost is that 2-D reads no longer spell left-to-right like
 the ergonomic win over the readability one, per the feedback, and
 document it loudly (open question #2 is now settled this way).
 
+**Type-preserving `map` via `new-like` (settled).**  `map` returns a
+collection of the *input's* type — a grid maps to a grid, a vector to
+a vector — so structure survives a transform.  Rather than special-case
+each backing inside `map`, one extra generic carries the knowledge:
+
+```forth
+GENERIC: new-like ( c -- d )   \ fresh, empty collection of c's type & shape
+```
+
+`map` builds `c new-like`, then fills it by linear index with `at!`;
+the algorithm itself stays backing-agnostic.  Each class answers
+`new-like` using only its boa constructor and accessors (never a
+forward-referenced `:` word — see the METHOD-ordering note):
+
+- **grid** → a fresh grid of the same `w*h`, zeroed; every linear index
+  is already writable.
+- **vector/darray** → an empty vector; its `at!` (Factor `set-nth` on a
+  growable) extends the backing on write, so filling indices `0..size-1`
+  in order grows it to the right length.
+
+This is the CoreProtocols answer to Factor's `like` — same payoff
+(type preservation), expressed as a protocol any new class joins by
+implementing one word.
+
 Concrete classes, each stealing a Factor vocab:
 
 | class    | backing (stolen)        | used by         |

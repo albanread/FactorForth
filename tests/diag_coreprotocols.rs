@@ -264,6 +264,36 @@ fn map_transforms_into_a_darray() {
     assert!(cap.contains("vals: 10 12 14"), "map doubled each: {cap}");
 }
 
+/// `map` is type-preserving: mapping a grid yields a *grid* of the same
+/// dimensions (not a flat darray).  The 2-D structure survives — the
+/// result reads back through at-xy and has the source's width/height.
+#[test]
+#[ignore]
+fn map_preserves_grid_type() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, ": dbl ( n -- n2 ) 2 * ;");
+    run(&s, &mut ctx, r#"
+        2 2 new-grid VALUE g
+        1  0 0 g at-xy!
+        2  1 0 g at-xy!
+        3  0 1 g at-xy!
+        4  1 1 g at-xy!
+        g ' dbl map VALUE g2          \ a doubled grid, same shape
+
+        \ g2 is a grid: read it 2-dimensionally
+        ." c00=" 0 0 g2 at-xy .        \ 2
+        ." c11=" 1 1 g2 at-xy .        \ 8
+        \ and it kept the grid's dimensions
+        ." dims=" g2 grid-w . g2 grid-h .   \ 2 2
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("c00=2"), "grid map (0,0): {cap}");
+    assert!(cap.contains("c11=8"), "grid map (1,1): {cap}");
+    assert!(cap.contains("dims=2 2"), "result is a 2x2 grid: {cap}");
+}
+
 /// `filter` keeps the elements that satisfy a predicate, into a fresh
 /// darray.  Written once over the protocol; the predicate xt is ticked
 /// from an earlier eval.
