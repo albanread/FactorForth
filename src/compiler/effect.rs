@@ -349,6 +349,11 @@ fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("addr-type",  e(0, 1));
     m.insert("other-type", e(0, 1));
 
+    // ── Programming-Tools word set ────────────────────────────────
+    m.insert(".s",    e(0, 0));   // -- (non-destructive stack print)
+    m.insert("words", e(0, 0));   // -- (list user definitions)
+    m.insert("dump",  e(1, 1));   // x -- x (inspect TOS, leaves it)
+
     m
 }
 

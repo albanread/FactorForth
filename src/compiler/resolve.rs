@@ -397,6 +397,17 @@ fn builtin_table() -> HashMap<&'static str, Target> {
         ("string?",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-string?"     }),
         ("xt?",        QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-xt?"         }),
         ("addr?",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-addr-pred?"  }),
+        // Programming-Tools word set.  `.s` is the non-destructive
+        // stack print; `words` lists the user's own definitions;
+        // `dump` is re-imagined to inspect the VALUE on top of stack
+        // (type tag + value + hex/ASCII for strings/addrs) rather
+        // than ANS's raw-memory `( addr u -- )` form, which makes no
+        // sense against our opaque nf-addr model.  All boot-defined
+        // in forth.runtime (see TOOLS_SETUP_SRC in session.rs).
+        (".s",         QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-.s"          }),
+        ("words",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-words"       }),
+        ("dump",       QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-dump"        }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

@@ -652,6 +652,101 @@ struct NfApi<'lib> {
     enqueue_interrupt:   Symbol<'lib, unsafe extern "C-unwind" fn(*mut c_void)>,
 }
 
+/// Programming-Tools word set, boot-defined into `forth.runtime`.
+///
+/// Three user-facing words, wired into the resolver as `.s`,
+/// `words`, and `dump`:
+///
+///   - `nf-.s    ( -- )`    non-destructive data-stack print,
+///                          gforth-style `<depth> a b c`.
+///   - `nf-words ( -- )`    list the user's own definitions (the
+///                          `scratchpad` vocab where `:` defs land).
+///   - `nf-dump  ( x -- x )` inspect the value on top of the stack:
+///                          a type tag + value, plus a 16-byte
+///                          hex/ASCII dump of the backing bytes for
+///                          strings and nf-addrs.  Leaves x in place.
+///
+/// Helpers are prefixed `(nf-...)` by convention for "implementation
+/// detail, not a user word."
+const TOOLS_SETUP_SRC: &str = r#"
+USING: kernel math math.parser sequences strings byte-arrays
+       io classes words quotations vocabs grouping namespaces
+       accessors combinators prettyprint.config forth.runtime ;
+IN: forth.runtime
+
+! Map a byte to a printable ASCII char, or '.' if non-printable.
+: (nf-ascii) ( ch -- ch' )
+    dup 32 < over 126 > or [ drop CHAR: . ] when ;
+
+! One 16-byte row: zero-padded hex offset, the bytes in hex, then
+! an ASCII gutter.
+: (nf-row) ( offset bytes -- )
+    [ 16 >base 4 CHAR: 0 pad-head write "  " write ] dip
+    [ [ 16 >base 2 CHAR: 0 pad-head write " " write ] each ] keep
+    "  " write [ (nf-ascii) write1 ] each nl ;
+
+! Classic hex+ASCII dump of a byte-array, 16 bytes per line.
+: nf-hexdump ( byte-array -- )
+    16 <groups> [ 16 * swap (nf-row) ] each-index ;
+
+! Print one value safely without prettyprint (the slim image
+! doesn't carry full prettyprint methods).  Integers honour the
+! current BASE; floats go through number>string; strings print
+! literally; anything else gets a class-name placeholder.
+! Print one value safely without prettyprint (the slim image
+! doesn't carry full prettyprint methods).  Integers honour the
+! current BASE; floats go through number>string; strings print
+! literally; anything else gets a short placeholder.  Declared
+! `inline` so per-call type narrowing lets `>base` see a proven
+! integer in its branch.
+: (nf-pp1) ( x -- )
+    {
+        { [ dup integer? ] [ number-base get >base write ] }
+        { [ dup float?   ] [ number>string write ] }
+        { [ dup string?  ] [ write ] }
+        { [ dup word?    ] [ name>> write ] }
+        [ drop "<obj>" write ]
+    } cond ; inline
+
+! The short type tag DUMP prints first.
+: (nf-type-name) ( x -- str )
+    {
+        { [ dup integer?   ] [ drop "INT"    ] }
+        { [ dup float?     ] [ drop "FLOAT"  ] }
+        { [ dup string?    ] [ drop "STRING" ] }
+        { [ dup quotation? ] [ drop "XT"     ] }
+        { [ dup word?      ] [ drop "XT"     ] }
+        { [ dup nf-addr?   ] [ drop "ADDR"   ] }
+        [ drop "OTHER" ]
+    } cond ;
+
+! Print the value detail (consumes its argument).
+: (nf-describe) ( x -- )
+    {
+        { [ dup integer? ] [ dup number-base get >base write
+                             "  (hex " write 16 >base write ")" write nl ] }
+        { [ dup float?   ] [ number>string write nl ] }
+        { [ dup string?  ] [ dup length number>string write " chars: " write
+                             dup write nl >byte-array nf-hexdump ] }
+        { [ dup nf-addr? ] [ ba>> dup length number>string write " bytes" write nl
+                             nf-hexdump ] }
+        { [ dup quotation? ] [ drop "<quotation>" write nl ] }
+        { [ dup word?    ] [ name>> write nl ] }
+        [ class-of name>> "<" write write ">" write nl ]
+    } cond ;
+
+: nf-dump ( x -- x )
+    dup (nf-type-name) write "  " write dup (nf-describe) ;
+
+: nf-.s ( -- )
+    get-datastack
+    "<" write dup length number>string write "> " write
+    [ (nf-pp1) " " write ] each nl ;
+
+: nf-words ( -- )
+    "scratchpad" vocab-words [ name>> print ] each ;
+"#;
+
 fn worker_main(
     dll_path: PathBuf,
     image_path: PathBuf,
@@ -829,6 +924,35 @@ fn worker_main(
             eprintln!(
                 "[session] WARNING host-library setup output: {}",
                 setup_result.interpreter_output,
+            );
+        }
+
+        // Programming-Tools word set — .S / WORDS / DUMP.  Defined as
+        // a SECOND boot eval (a plain raw string, no format! brace
+        // escaping) so the Factor source reads naturally.  Like the
+        // type-introspection helpers above, these live in
+        // forth.runtime and are boot-defined so we can iterate
+        // without an image rebuild.
+        //
+        // The headline word is DUMP, deliberately re-imagined for our
+        // value model: ANS `DUMP ( addr u -- )` hex-dumps raw memory,
+        // but our addresses are opaque nf-addr tuples — dumping one
+        // would print Factor internals, not user data.  Instead our
+        // `DUMP ( x -- x )` inspects the VALUE on top of the stack:
+        // it prints a type tag + value, and for strings / nf-addrs it
+        // appends a classic 16-byte hex+ASCII dump of the backing
+        // bytes.  Non-destructive (leaves x) so it drops into a
+        // pipeline as a debugging tap without disturbing the stack.
+        let tools_setup = TOOLS_SETUP_SRC;
+        trace("worker_main", "running tools setup eval");
+        let tools_result = eval_inner(&api, vm, tools_setup);
+        trace("worker_main", &format!(
+            "tools setup done; output={:?}",
+            tools_result.interpreter_output));
+        if !tools_result.interpreter_output.trim().is_empty() {
+            eprintln!(
+                "[session] WARNING tools setup output: {}",
+                tools_result.interpreter_output,
             );
         }
 
