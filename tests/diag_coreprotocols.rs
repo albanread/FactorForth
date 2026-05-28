@@ -161,11 +161,11 @@ fn darray_grows_and_reads() {
         20 xs d-push
         30 xs d-push
         xs size .            \ 3
-        0 xs elt .           \ 10
-        2 xs elt .           \ 30
+        0 xs at .           \ 10
+        2 xs at .           \ 30
         \ overwrite element 1
-        99 1 xs elt!
-        1 xs elt .           \ 99
+        99 1 xs at!
+        1 xs at .           \ 99
     "#);
     let cap = captured(&out);
     eprintln!("captured: {cap:?}");
