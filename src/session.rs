@@ -772,6 +772,8 @@ IN: forth.runtime
 ! a runtime xt has unknown effect, so Factor can't type-check the
 ! enclosing loop.  Exposed as `call1` for collection algorithms.
 : nf-call1 ( x xt -- ) call( x -- ) ;
+! Transforming call: one in, one out — for map/find-style algorithms.
+: nf-call1> ( x xt -- y ) call( x -- y ) ;
 "#;
 
 fn worker_main(

@@ -95,3 +95,17 @@ METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
     each-c size 0 do
         i each-c at  each-xt call1
     loop ;
+
+\ `map ( c xt -- d )` applies xt ( x -- y ) to every element and
+\ collects the results into a fresh darray (any input collection,
+\ darray result — a type-preserving `map` waits on a `like` protocol).
+0 VALUE map-c
+0 VALUE map-xt
+0 VALUE map-dst
+: map ( c xt -- d )
+    TO map-xt  TO map-c
+    new-darray TO map-dst
+    map-c size 0 do
+        i map-c at  map-xt call1>  map-dst d-push
+    loop
+    map-dst ;

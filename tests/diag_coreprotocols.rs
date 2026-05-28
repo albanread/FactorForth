@@ -242,6 +242,28 @@ fn each_with_user_accumulator() {
     assert!(cap.contains("sum=9"), "each + accumulator: {cap}");
 }
 
+/// `map` transforms every element into a fresh darray.  Written once
+/// over the protocol; the transform xt is ticked from an earlier
+/// eval.
+#[test]
+#[ignore]
+fn map_transforms_into_a_darray() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, ": dbl ( n -- n2 ) 2 * ;");
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        5 xs d-push  6 xs d-push  7 xs d-push
+        xs ' dbl map VALUE ys     \ doubled into a new darray
+        ." len=" ys size .         \ 3
+        ." vals: " ys ' . each cr  \ 10 12 14
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("len=3"), "map result size: {cap}");
+    assert!(cap.contains("vals: 10 12 14"), "map doubled each: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the
