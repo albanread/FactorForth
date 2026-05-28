@@ -14,52 +14,27 @@ front-end borrowed from the WF64 project.
 
 When you type a Forth line and hit Enter, this is what happens:
 
+```mermaid
+flowchart TB
+    Src["Forth source — : square dup * ;  3 4 + ."]
+    Lex["lex — tokens: COLON IDENT NUM SEMI …"]
+    Parse["parse — AST: Definition(square) + TopLevel"]
+    Resolve["resolve — each name → vocab word, user word, or error"]
+    Effect["effect-check — infer stack effects (square: a -- a)"]
+    Sema["sema — escape analysis · templates · $-strings · LET"]
+    Emit["emit — Factor source IR"]
+    Eval["Session::eval — hand IR to the Factor VM"]
+    Out["captured output · ANS errors"]
+
+    Src --> Lex --> Parse --> Resolve --> Effect --> Sema --> Emit --> Eval --> Out
 ```
-   "  : square dup * ;  3 4 + .  "
-            |
-            v
-   +------------------+
-   | lex              |  tokens: COLON IDENT NUM SEMI ...
-   +------------------+
-            |
-            v
-   +------------------+
-   | parse            |  AST: Definition(square, [dup, *])
-   |                  |       TopLevel([3, 4, +, .])
-   +------------------+
-            |
-            v
-   +------------------+
-   | resolve          |  every name -> built-in vocab word OR
-   |                  |  user-defined word OR an error
-   +------------------+
-            |
-            v
-   +------------------+
-   | effect-check     |  square: ( a -- a )   inferred from dup *
-   |                  |  toplevel: ( -- )      everything balances
-   +------------------+
-            |
-            v
-   +------------------+
-   | sema             |  escape analysis on variables, template
-   |                  |  detection, $-string literal lifting,
-   |                  |  LET expansion
-   +------------------+
-            |
-            v
-   +------------------+
-   | emit             |  Factor source IR:
-   |                  |    USING: ... ;
-   |                  |    : square ( a -- a ) dup * ;
-   |                  |    3 4 + .
-   +------------------+
-            |
-            v
-   +------------------+
-   | Session::eval    |  hand IR to the Factor VM, capture
-   |                  |  any output, return errors
-   +------------------+
+
+The emitted IR for that line is just renamed Forth:
+
+```factor
+USING: ... ;
+: square ( a -- a ) dup * ;
+3 4 + .
 ```
 
 Each phase is a separate module under `src/compiler/`.  Each is
@@ -87,25 +62,32 @@ Three reasons:
 
 ## VM integration
 
-```
-factorforth-ui.exe         (the Rust binary you launched)
-+- libloading::Library     (LoadLibrary on factor.dll)
-|     ^- vtable of nf_* embedding API entry points
-+- Session worker thread   (owns the VM; single-threaded by design)
-|     +- nf_init_factor    (boot the image)
-|     +- nf_eval_string    (compile + run user source)
-|     +- OBJ_EVAL_CALLBACK (our custom Forth callback)
-|           +- parse-string + with-datastack
-|           +- nf-format-error (ANS-style error messages)
-+- GUI thread              (Direct2D MDI message pump)
+The VM is single-threaded and TLS-resident: every call into it must
+happen on the thread that initialised it.  We own that thread — the
+Session worker — and route requests in via channels.  The GUI thread
+keeps pumping Windows messages while the VM blocks on `KEY` or a long
+compile, so the IDE never freezes.
+
+```mermaid
+sequenceDiagram
+    participant U as You (REPL)
+    participant G as GUI thread
+    participant W as Session worker
+    participant V as Factor VM (factor.dll)
+
+    U->>G: type a line, press Enter
+    G->>W: eval request (channel)
+    W->>V: nf_eval_string(IR)
+    Note over V: OBJ_EVAL_CALLBACK — parse-string + with-datastack
+    V-->>W: output + data-stack snapshot
+    W-->>G: result (or ANS error)
+    G-->>U: console + stack pane update
+    Note over G,V: GUI keeps pumping messages while the VM works — no freeze
 ```
 
-The VM is single-threaded and TLS-resident.  Every call into it
-must happen on the thread that initialised it.  We own that
-thread — the Session worker — and route requests in via
-channels.  The GUI thread keeps pumping Windows messages while
-the VM blocks on `KEY` or a long compile, so the IDE never
-freezes.
+The Rust side reaches the VM through `libloading` (a `LoadLibrary` on
+`factor.dll`, then a vtable of `nf_*` embedding-API entry points:
+`nf_init_factor` to boot the image, `nf_eval_string` to compile + run).
 
 ## I/O routing
 
