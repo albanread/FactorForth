@@ -45,7 +45,11 @@
 pub mod compiler;
 #[cfg(target_os = "windows")]
 pub mod session;
-// pub mod runtime;   // Phase 3
+// gfx — the Factor-callable graphics FFI (rt_gpane_*), forked from
+// WF64's runtime to call our own `igui` crate.  Windows-only (igui
+// is `#![cfg(windows)]`).
+#[cfg(target_os = "windows")]
+pub mod gfx;
 // pub mod ffi;       // Phase 3
 
 /// Crate identifier — Phase 0 placeholder so `cargo check` has something

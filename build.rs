@@ -82,16 +82,20 @@ fn main() {
         // M2.x #32 ANS File Access: INCLUDED calls this from
         // Factor to read + compile an ANS source file.
         "rt_compile_ans",
-        // NOTE: the rt_gpane_* graphics FFI used to be exported here,
-        // but those functions were *defined* in wf64::runtime.  When
-        // we cut the wf64 crate dependency (we use Factor, not WF64's
-        // MASM/JASM/NewGC engine) and forked only the igui window
-        // shell into crates/igui, those definitions went with WF64.
-        // The Factor-callable graphics API (forth.wf64-gfx) is
-        // therefore unwired for now; it will be reintroduced — owned
-        // by us this time — as part of the CoreProtocols GUI layer
-        // (Phase 4), which is where a canvas/drawing FFI belongs.
-        // See docs/design/core-protocols.md §5.
+        // Graphics FFI — now OURS, defined in src/gfx.rs calling the
+        // forked `igui` crate (no longer wf64::runtime).  The
+        // forth.wf64-gfx vocab in factorforth.image GetProcAddress's
+        // these; they must be on this export list to be in the exe's
+        // export table.
+        "rt_gpane_open",
+        "rt_gpane_begin",
+        "rt_gpane_present",
+        "rt_gpane_clear",
+        "rt_gpane_fill_rect",
+        "rt_gpane_stroke_rect",
+        "rt_gpane_line",
+        "rt_gpane_fill_circle",
+        "rt_gpane_next_event_for",
     ];
     // Apply only to bins/tests that actually link session.rs.
     // The legacy `embed-smoke` binary doesn't (it does its own
