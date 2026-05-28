@@ -36,6 +36,19 @@ For `CLASS: point SLOT: x SLOT: y ;` the compiler generates:
 The class name itself (`point`) is also reserved so `METHOD:`
 declarations can dispatch on it.
 
+One `CLASS:` line desugars into a Factor `TUPLE:` plus the full
+family of words — you write the declaration, the compiler writes
+the boilerplate:
+
+```mermaid
+flowchart LR
+    C["CLASS: point SLOT: x SLOT: y ;"] --> T["a Factor TUPLE: with slots x, y"]
+    C --> Ctor["constructor — one, takes all slots"]
+    C --> Get["getters — one per slot"]
+    C --> SetC["chainable setters — one per slot"]
+    C --> SetA["ANS stores — one per slot"]
+```
+
 ## Constructing instances
 
 The constructor `<classname>` takes one item per slot in
@@ -130,8 +143,24 @@ CLASS: colored-point EXTENDS point
 ;
 ```
 
-A `colored-point` IS-A `point`.  Parent slots come first in the
-constructor, child slots last:
+A `colored-point` IS-A `point` — it inherits `x` and `y`, and adds
+`rgb`. Single inheritance only; compose (a slot that holds another
+object) for everything else.
+
+```mermaid
+classDiagram
+    direction TB
+    class point {
+        +x
+        +y
+    }
+    class colored-point {
+        +rgb
+    }
+    point <|-- colored-point : EXTENDS
+```
+
+Parent slots come first in the constructor, child slots last:
 
 ```forth
 3 4 255 <colored-point>   \ x=3, y=4, rgb=255

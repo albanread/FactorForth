@@ -24,6 +24,18 @@ END
 - The expression is plain infix arithmetic with the usual
   precedence: `* /` before `+ -`, parentheses override.
 
+At compile time, the LET block flows through four steps — you
+write the formula, the compiler hands the VM postfix stack ops:
+
+```mermaid
+flowchart LR
+    S["data stack: … a b"] --> Bind["bind inputs — top of stack is rightmost"]
+    Bind --> Parse["parse infix — * / bind tighter than + -"]
+    Parse --> Lower["lower to postfix stack ops"]
+    Lower --> Push["push outputs in listed order"]
+    Push --> S2["data stack: … c"]
+```
+
 ## Example: hypotenuse
 
 ```forth
