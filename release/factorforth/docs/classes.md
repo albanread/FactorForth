@@ -346,15 +346,49 @@ dispatch calls is decided at generic-emit time.
   eval as the generic)
 - Polymorphic slots (tag-erased)
 
-## What's coming
+## Deliberate non-goals
 
-- `:around` method combinations
-- `SUPER:` / `call-next-method` for chaining to the parent
-  method
+Some CLOS features are intentionally NOT here, and that's a
+design decision, not a backlog:
+
+- **Multiple inheritance.**  Factor's tuples are
+  single-inheritance, and we agree with that constraint:
+  composition (a slot holding another object) is simpler to
+  reason about than a class precedence list, and most designs
+  that reach for multiple inheritance are better served by
+  composition anyway.  `EXTENDS` gives you a single parent;
+  compose for the rest.
+
+- **`:around` / `call-next-method`.**  Factor's `multi-methods`
+  dispatch engine doesn't provide `call-next-method`, so adding
+  `:around` would mean synthesising a parallel dispatch
+  mechanism that fights the grain of the substrate.  We'd
+  rather stay close to what Factor gives us natively.
+  `:before` / `:after` cover the overwhelming majority of what
+  people actually use method combinations for (guards, logging,
+  audit, notification).
+
+- **Metaobject protocol / metaclasses.**  Out of scope for a
+  Forth.
+
+The line we hold: the Rust front end is grammar + desugar; the
+runtime substrate is Factor's own tuple + generic + multi-methods
+machinery.  Every feature here rides that machinery directly.  We
+don't reimplement dispatch.
+
+## Possible future additions (still on the Factor reservation)
+
+These would ride Factor's native tuple machinery if we ever want
+them — no synthesised dispatch:
+
+- Slot initial values (`{ slot initial: v }` is native to
+  Factor TUPLE:)
+- Typed slots (`{ slot integer }` is native)
+- `CLASS-OF` / class-membership predicates (Factor's `class-of`
+  is one word)
 - Cross-eval aux methods (define `METHOD-BEFORE:` in a later
-  eval than the `GENERIC:`)
-- Slot initial values (`SLOT: x INIT 0.0e`)
-- Per-class `TYPEOF` codes + `CLASS-OF`
+  eval than the `GENERIC:` — needs persistent shadow-generic
+  state in the compile context)
 
 ## A worked example: linked lists
 
