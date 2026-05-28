@@ -20,10 +20,10 @@ picks the most specific method for the actual argument classes.
 
 ```mermaid
 flowchart LR
-    Call["area ( shape -- n )"] --> Disp{{dispatch on<br/>argument class}}
+    Call["area ( shape -- n )"] --> Disp{{dispatch on — argument class}}
     Disp -->|circle| MC["METHOD: area ( s:circle -- n )"]
     Disp -->|square| MS["METHOD: area ( s:square -- n )"]
-    Disp -->|else| MO["METHOD: area ( s:object -- n )<br/>catch-all"]
+    Disp -->|else| MO["METHOD: area ( s:object -- n ) — catch-all"]
 ```
 
 The payoff: protocols are **open**. Because dispatch is multi-method,
@@ -84,7 +84,7 @@ where message-passing systems resort to `instanceof` ladders.
 
 ```mermaid
 flowchart TB
-    G["intersect ( a b -- kind )"] --> D{{dispatch on<br/>BOTH classes}}
+    G["intersect ( a b -- kind )"] --> D{{dispatch on — BOTH classes}}
     D -->|line, line| LL["line / line"]
     D -->|line, circle| LC["line / circle"]
     D -->|circle, line| CL["circle / line"]
@@ -100,9 +100,9 @@ primary's return value is what the caller sees.
 
 ```mermaid
 flowchart TB
-    Start([call generic]) --> B["METHOD-BEFORE:<br/>most-specific first"]
-    B --> P["METHOD:<br/>the primary"]
-    P --> A["METHOD-AFTER:<br/>least-specific first"]
+    Start([call generic]) --> B["METHOD-BEFORE: — most-specific first"]
+    B --> P["METHOD: — the primary"]
+    P --> A["METHOD-AFTER: — least-specific first"]
     A --> R([return the primary's value])
 ```
 
@@ -120,12 +120,12 @@ flow downward only.
 
 ```mermaid
 flowchart TB
-    L5["Layer 5 · GUI & events<br/>canvas · event hierarchy · app loop"]
-    L4["Layer 4 · Files<br/>path · file · file-stream"]
-    L3["Layer 3 · Text & streams<br/>string · STREAM protocol"]
-    L2["Layer 2 · Numerics<br/>vec2 · complex"]
-    L1["Layer 1 · Collections<br/>vector · grid · dict · set"]
-    L0["Layer 0 · Core protocol<br/>initialize · show · equals? · clone"]
+    L5["Layer 5 · GUI & events — canvas · event hierarchy · app loop"]
+    L4["Layer 4 · Files — path · file · file-stream"]
+    L3["Layer 3 · Text & streams — string · STREAM protocol"]
+    L2["Layer 2 · Numerics — vec2 · complex"]
+    L1["Layer 1 · Collections — vector · grid · dict · set"]
+    L0["Layer 0 · Core protocol — initialize · show · equals? · clone"]
 
     L5 --> L3
     L5 --> L2
