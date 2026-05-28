@@ -264,6 +264,29 @@ fn map_transforms_into_a_darray() {
     assert!(cap.contains("vals: 10 12 14"), "map doubled each: {cap}");
 }
 
+/// `filter` keeps the elements that satisfy a predicate, into a fresh
+/// darray.  Written once over the protocol; the predicate xt is ticked
+/// from an earlier eval.
+#[test]
+#[ignore]
+fn filter_keeps_matching_elements() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;");
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push
+        4 xs d-push  5 xs d-push  6 xs d-push
+        xs ' even? filter VALUE ys   \ keep the evens into a new darray
+        ." len=" ys size .            \ 3
+        ." vals: " ys ' . each cr     \ 2 4 6
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("len=3"), "filter result size: {cap}");
+    assert!(cap.contains("vals: 2 4 6"), "filter kept the evens: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the

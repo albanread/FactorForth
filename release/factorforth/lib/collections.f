@@ -109,3 +109,18 @@ METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
         i map-c at  map-xt call1>  map-dst d-push
     loop
     map-dst ;
+
+\ `filter ( c xt -- d )` keeps the elements for which the predicate
+\ xt ( x -- ? ) is true, into a fresh darray.
+0 VALUE filt-c
+0 VALUE filt-xt
+0 VALUE filt-dst
+: filter ( c xt -- d )
+    TO filt-xt  TO filt-c
+    new-darray TO filt-dst
+    filt-c size 0 do
+        i filt-c at                 \ element
+        dup filt-xt call1>          \ element flag
+        if filt-dst d-push else drop then
+    loop
+    filt-dst ;
