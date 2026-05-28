@@ -5,9 +5,11 @@
 //!   1. Catch programs where a declared `( ins -- outs )` annotation
 //!      doesn't match the body's actual behaviour.  Example:
 //!
-//!          : bad ( -- ) 1 2 ;
-//!          ↓
-//!          declared 0 outputs but body produces 2
+//!      ```text
+//!      : bad ( -- ) 1 2 ;
+//!      ↓
+//!      declared 0 outputs but body produces 2
+//!      ```
 //!
 //!   2. Provide the inferred effect of every user-defined word so
 //!      callers don't have to re-derive it.  Lets `: caller foo bar
