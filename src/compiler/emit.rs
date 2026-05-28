@@ -201,7 +201,11 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
                 wrote_anything = true;
             }
             Item::Value(v) => {
-                emit_value(v, r, &mut out); out.push('\n');
+                // Declaration only (SYMBOL + reader).  The seeding that
+                // RUNS the initializer is emitted in Pass D, in source
+                // order, so its side effects don't jump ahead of earlier
+                // top-level code.
+                emit_value_decl(v, r, &mut out); out.push('\n');
                 wrote_anything = true;
             }
             Item::Class(c) => {
@@ -252,12 +256,25 @@ pub fn emit(r: &Sema, opts: &EmitOpts) -> String {
         }
     }
 
-    // Pass D: TopLevel runs in source order.
+    // Pass D: load-time EXECUTION, in strict source order.  This is the
+    // phase whose ordering the user can observe (side effects, prints),
+    // so VALUE seeding is interleaved with TopLevel here rather than
+    // hoisted into the definitions phase — a VALUE's initializer body
+    // runs exactly where it sits in the source relative to other
+    // top-level code.
     for item in &r.program.items {
-        if let Item::TopLevel { exprs, .. } = item {
-            emit_exprs(exprs, r, &mut out);
-            out.push('\n');
-            wrote_anything = true;
+        match item {
+            Item::TopLevel { exprs, .. } => {
+                emit_exprs(exprs, r, &mut out);
+                out.push('\n');
+                wrote_anything = true;
+            }
+            Item::Value(v) => {
+                emit_value_seed(v, r, &mut out);
+                out.push('\n');
+                wrote_anything = true;
+            }
+            _ => {}
         }
     }
     let _ = wrote_anything;
@@ -334,15 +351,32 @@ fn value_storage_name(name_lc: &str) -> String {
 ///   2. `<initial-body> nf-value-<name> set-global` — seed at load
 ///   3. `: <name> ( -- v ) nf-value-<name> get-global ; inline`
 ///                                          — the reader word
-fn emit_value(v: &ValueDef, r: &Sema, out: &mut String) {
+/// VALUE emission is split in two so load-time side effects stay in
+/// source order (see `emit`'s pass comments):
+///
+///   * [`emit_value_decl`] — the SYMBOL handle + the reader word.  Pure
+///     declarations, emitted in the up-front definitions phase so the
+///     symbol and reader are visible to everything that references them.
+///   * [`emit_value_seed`] — the one-shot `<initial-body> set-global`
+///     that RUNS the initializer.  Emitted in the top-level phase at the
+///     VALUE's own source position, so any side effects in the initial
+///     body (a `VALUE` greedily captures the whole pending run, which
+///     can include prints) fire when the user wrote them — not hoisted
+///     ahead of earlier top-level code.
+fn emit_value_decl(v: &ValueDef, _r: &Sema, out: &mut String) {
     let lc = v.name.to_ascii_lowercase();
     let storage = value_storage_name(&lc);
     write!(out, "SYMBOL: {storage}\n").unwrap();
-    emit_exprs(&v.initial, r, out);
-    write!(out, " {storage} set-global\n").unwrap();
     write!(out, ": {n} ( -- v ) {storage} get-global ; inline",
         n = super::resolve::factor_user_name(&lc),
     ).unwrap();
+}
+
+fn emit_value_seed(v: &ValueDef, r: &Sema, out: &mut String) {
+    let lc = v.name.to_ascii_lowercase();
+    let storage = value_storage_name(&lc);
+    emit_exprs(&v.initial, r, out);
+    write!(out, " {storage} set-global").unwrap();
 }
 
 /// Emit a standard collection (array / farray / cbuffer).  Three
