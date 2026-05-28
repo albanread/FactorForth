@@ -14,6 +14,7 @@ use newfactor::session::{IoMode, Session, SessionOpts};
 /// the release artifacts never drift.
 const CORE: &str = include_str!("../release/factorforth/lib/core.f");
 const COLLECTIONS: &str = include_str!("../release/factorforth/lib/collections.f");
+const OTHELLO: &str = include_str!("../release/factorforth/lib/othello.f");
 
 fn fresh() -> (Session, Arc<Mutex<Vec<u8>>>, CompileContext) {
     let out = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -146,4 +147,49 @@ fn grid_in_bounds_is_zero_based_xy() {
     eprintln!("captured: {cap:?}");
     // -1 -1 0 0 0  (ANS true is -1, false is 0)
     assert!(cap.contains("-1 -1 0 0 0"), "bounds flags: {cap}");
+}
+
+// ── Phase 1 capstone: text Othello ──────────────────────────────
+
+/// The opening position renders as the standard Othello board — the
+/// central four squares, everything else empty.  Proves Layer 0 +
+/// Layer 1 compose into a real program.
+#[test]
+#[ignore]
+fn othello_opening_board_renders() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, OTHELLO);
+    run(&s, &mut ctx, "othello-new show-board");
+    let cap = captured(&out);
+    eprintln!("captured:\n{cap}");
+    // rows 3 and 4 carry the centre; the rest are all dots.
+    assert!(cap.contains("...OX..."), "row 3 (O X): {cap}");
+    assert!(cap.contains("...XO..."), "row 4 (X O): {cap}");
+    assert!(cap.contains("........"), "an empty row: {cap}");
+    // 64 cells total: 60 empty dots + 2 X + 2 O
+    assert_eq!(cap.matches('.').count(), 60, "60 empty cells: {cap}");
+    assert_eq!(cap.matches('X').count(), 2, "2 black: {cap}");
+    assert_eq!(cap.matches('O').count(), 2, "2 white: {cap}");
+}
+
+/// Playing a legal opening move flips the bracketed disc.  Black at
+/// (2,3) brackets the white at (3,3) against the black at (4,3),
+/// flipping it: row 3 becomes `..XXX...`, and the board goes 4 black
+/// / 1 white.
+#[test]
+#[ignore]
+fn othello_play_flips_a_disc() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, OTHELLO);
+    run(&s, &mut ctx, "othello-new  2 3 black play  show-board");
+    let cap = captured(&out);
+    eprintln!("captured:\n{cap}");
+    assert!(cap.contains("..XXX..."), "row 3 after flip: {cap}");
+    assert!(cap.contains("...XO..."), "row 4 unchanged: {cap}");
+    assert_eq!(cap.matches('X').count(), 4, "4 black after flip: {cap}");
+    assert_eq!(cap.matches('O').count(), 1, "1 white after flip: {cap}");
 }
