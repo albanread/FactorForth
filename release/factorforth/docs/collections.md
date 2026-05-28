@@ -8,10 +8,12 @@ If you want the *why* — the CLOS dispatch model, the layer map, the
 design rationale — read [CoreProtocols](coreprotocols.md). This page is
 the *what*: every word, its stack effect, and a worked example.
 
-Everything here is ordinary Forth written on the object system. To use
-it, load the library file:
+Everything here is ordinary Forth written on the object system. Load
+Layer 0 first — the value-search words (`member?`, `index-of`) build on
+its `equals?`:
 
 ```forth
+INCLUDE lib/core.f
 INCLUDE lib/collections.f
 ```
 
@@ -170,6 +172,14 @@ is an **execution token** — get one with `'` (tick): `xs ' . each`.
 | `sum`     | `( c -- n )`          | —                      | `0 ' + fold` (numbers)          |
 | `product` | `( c -- n )`          | —                      | `1 ' * fold` (numbers)          |
 
+And two that search by **value** rather than a predicate — they compare
+with Layer 0's `equals?`, so they respect a class's own equality:
+
+| word       | stack effect      | result                                  |
+|------------|-------------------|-----------------------------------------|
+| `member?`  | `( x c -- ? )`    | true iff some element equals `x`        |
+| `index-of` | `( x c -- i ? )`  | index of the first match + a found flag |
+
 ### each — run an xt over every element
 
 ```forth
@@ -266,6 +276,30 @@ Number collections only.
 xs sum .                 \ 21   (1+2+3+4+5+6)
 xs product .             \ 720
 ```
+
+### member? / index-of — search by value
+
+Where `find` takes a predicate, these take a *value* and compare it
+against each element with Layer 0's `equals?`. Because `equals?` is an
+overridable generic, a class that defines its own equality is searched
+on its own terms — for free.
+
+```forth
+new-darray VALUE xs
+10 xs d-push  20 xs d-push  30 xs d-push  20 xs d-push
+20 xs member? .          \ -1  (present)
+99 xs member? .          \  0  (absent)
+
+\ index-of returns the FIRST position plus a found flag
+20 xs index-of           \ ( 1 -1 )  — first 20 is at index 1
+\ a miss gives index 0 and a false flag, so 0 is never ambiguous
+99 xs index-of           \ ( 0 0 )
+```
+
+> `equals?` lives in Layer 0 (`core.f`); its default is value/structural
+> equality. Override it for a class — `METHOD: equals? ( a b:account -- ? )`
+> — and every value search here follows suit. See
+> [Classes and methods](classes.md).
 
 ---
 

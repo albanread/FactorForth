@@ -29,3 +29,23 @@ METHOD: show ( x:object -- )
 \ interactive case.  Defined once over the generic, so it works for
 \ every class that implements `show`.
 : show-ln ( x -- )  show cr ;
+
+\ ── equals? ───────────────────────────────────────────────────────
+\
+\ `equals? ( a b -- ? )` is value equality — the protocol hook the
+\ collection searches (member?, index-of) dispatch through, so they
+\ honour whatever equality a class defines.
+\
+\ The catch-all default is ANS `=`, which is already structural: it
+\ compares numbers and characters by value, and (because the substrate
+\ does the same) like-shaped objects by their contents.  Override it
+\ for a class that wants its own notion of equality — say, comparing
+\ only an id slot:
+\
+\   METHOD: equals? ( a b:account -- ? )  acct>id swap acct>id = ;
+\
+\ It is distinct from ANS `=` only in being open: your method joins the
+\ protocol without touching the library.
+GENERIC: equals? ( a b -- ? )
+
+METHOD: equals? ( a b:object -- ? )  = ;

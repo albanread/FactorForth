@@ -230,3 +230,40 @@ METHOD: new-like ( d:darray -- e )
 \ collections only — they lean on +/* directly.
 : sum     ( c -- n )  0 ' + fold ;
 : product ( c -- n )  1 ' * fold ;
+
+\ ── Equality-based search ─────────────────────────────────────────
+\
+\ Where find/any?/all? take a predicate, these take a value and compare
+\ it against each element with Layer 0's `equals?` — so they honour a
+\ class's own notion of equality automatically.  (Requires core.f.)
+
+\ `member? ( x c -- ? )` — true iff some element of c equals x.
+0 VALUE mem-x
+0 VALUE mem-c
+0 VALUE mem-flag
+: member? ( x c -- ? )
+    TO mem-c  TO mem-x
+    0 TO mem-flag
+    mem-c size 0 ?do
+        mem-x  i mem-c at  equals?
+        if  -1 TO mem-flag  then
+    loop
+    mem-flag ;
+
+\ `index-of ( x c -- i ? )` — the linear index of the first element
+\ equal to x, plus a found flag.  Like `find`, two returns so index 0
+\ is unambiguous from "not present".
+0 VALUE idx-x
+0 VALUE idx-c
+0 VALUE idx-i
+0 VALUE idx-found
+: index-of ( x c -- i ? )
+    TO idx-c  TO idx-x
+    0 TO idx-i  0 TO idx-found
+    idx-c size 0 ?do
+        idx-x  i idx-c at  equals?
+        if
+            idx-found 0= if  i TO idx-i  -1 TO idx-found  then
+        then
+    loop
+    idx-i idx-found ;

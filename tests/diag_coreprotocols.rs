@@ -94,6 +94,44 @@ fn show_ln_reuses_the_protocol() {
     assert_eq!(cap.matches('#').count(), 2, "two shows: {cap}");
 }
 
+/// `equals?` is an open protocol: its default is structural/numeric
+/// equality, but a class can override it — and `member?` (Layer 1)
+/// dispatches through it, so value search honours the class's own rule.
+#[test]
+#[ignore]
+fn equals_override_drives_member_search() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        \ default equality: by value
+        ." n1=" 5 5 equals? .        \ -1
+        ." n2=" 5 6 equals? .        \ 0
+
+        \ a class whose equality is its id slot only (balance ignored)
+        CLASS: account SLOT: id SLOT: balance ;
+        METHOD: equals? ( a b:account -- ? )
+            account>id swap account>id = ;
+
+        7 100 <account> VALUE a1
+        7 999 <account> VALUE a2      \ same id, different balance
+        ." same=" a1 a2 equals? .     \ -1 (equal by id)
+
+        \ member? rides equals?, so a same-id account counts as present
+        new-darray VALUE accts
+        a1 accts d-push
+        8 50 <account> VALUE a3       \ probe: id 8, never pushed
+        ." in1=" a2 accts member? .   \ -1 (a2 matches a1 by id)
+        ." in2=" a3 accts member? .   \ 0  (no id-8 account present)
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n1=-1") && cap.contains("n2=0"), "default equals?: {cap}");
+    assert!(cap.contains("same=-1"), "override compares by id: {cap}");
+    assert!(cap.contains("in1=-1"), "member? honours equals? override: {cap}");
+    assert!(cap.contains("in2=0"), "member? absent by id: {cap}");
+}
+
 // ── Layer 1: grid ───────────────────────────────────────────────
 
 /// A grid stores and retrieves cells by (x, y), 0-based.  Write a
@@ -102,6 +140,7 @@ fn show_ln_reuses_the_protocol() {
 #[ignore]
 fn grid_stores_and_reads_by_xy() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         \ a 3-wide, 2-tall grid, held in a VALUE for clean access
@@ -133,6 +172,7 @@ fn grid_stores_and_reads_by_xy() {
 #[ignore]
 fn grid_in_bounds_is_zero_based_xy() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         3 2 new-grid          \ x in 0..2, y in 0..1
@@ -154,6 +194,7 @@ fn grid_in_bounds_is_zero_based_xy() {
 #[ignore]
 fn darray_grows_and_reads() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         new-darray VALUE xs
@@ -179,6 +220,7 @@ fn darray_grows_and_reads() {
 #[ignore]
 fn collection_protocol_is_polymorphic() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         \ a generic word over ANY collection: print its size
@@ -203,6 +245,7 @@ fn collection_protocol_is_polymorphic() {
 #[ignore]
 fn each_iterates_any_collection() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         new-darray VALUE xs
@@ -229,6 +272,7 @@ fn each_iterates_any_collection() {
 #[ignore]
 fn each_with_user_accumulator() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, "0 VALUE acc  : add-acc ( n -- ) acc + TO acc ;");
     run(&s, &mut ctx, r#"
@@ -249,6 +293,7 @@ fn each_with_user_accumulator() {
 #[ignore]
 fn map_transforms_into_a_darray() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, ": dbl ( n -- n2 ) 2 * ;");
     run(&s, &mut ctx, r#"
@@ -271,6 +316,7 @@ fn map_transforms_into_a_darray() {
 #[ignore]
 fn map_preserves_grid_type() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, ": dbl ( n -- n2 ) 2 * ;");
     run(&s, &mut ctx, r#"
@@ -301,6 +347,7 @@ fn map_preserves_grid_type() {
 #[ignore]
 fn filter_keeps_matching_elements() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;");
     run(&s, &mut ctx, r#"
@@ -324,6 +371,7 @@ fn filter_keeps_matching_elements() {
 #[ignore]
 fn fold_reduces_with_an_accumulator() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, r#"
         new-darray VALUE xs
@@ -345,6 +393,7 @@ fn fold_reduces_with_an_accumulator() {
 #[ignore]
 fn predicate_combinators() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;  : big? ( n -- ? ) 3 > ;");
     run(&s, &mut ctx, r#"
@@ -377,6 +426,7 @@ fn predicate_combinators() {
 #[ignore]
 fn find_and_numeric_reductions() {
     let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
     run(&s, &mut ctx, COLLECTIONS);
     run(&s, &mut ctx, ": even? ( n -- ? ) 2 mod 0= ;");
     run(&s, &mut ctx, r#"
@@ -402,6 +452,35 @@ fn find_and_numeric_reductions() {
     assert!(cap.contains("none=0 0"), "find miss -> 0 and false: {cap}");
     assert!(cap.contains("sum=21"), "sum reduces with + : {cap}");
     assert!(cap.contains("prod=720"), "product reduces with * : {cap}");
+}
+
+/// `member?` and `index-of` search by value, comparing through Layer 0's
+/// `equals?` (so they respect a class's own equality).  member? answers
+/// presence; index-of gives the first position plus a found flag.
+#[test]
+#[ignore]
+fn member_and_index_of_search_by_value() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        10 xs d-push  20 xs d-push  30 xs d-push  20 xs d-push
+
+        ." has20=" 20 xs member? .       \ -1 (present)
+        ." has99=" 99 xs member? .       \ 0  (absent)
+
+        \ first index of 20 is 1; the duplicate at 3 is ignored
+        20 xs index-of  ." at=" swap . .  \ "1 -1"
+        \ a miss gives index 0 and a false flag
+        99 xs index-of  ." miss=" swap . . \ "0 0"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("has20=-1"), "member? present: {cap}");
+    assert!(cap.contains("has99=0"), "member? absent: {cap}");
+    assert!(cap.contains("at=1 -1"), "index-of first match + flag: {cap}");
+    assert!(cap.contains("miss=0 0"), "index-of miss -> 0 and false: {cap}");
 }
 
 // ── Phase 1 capstone: text Othello ──────────────────────────────
