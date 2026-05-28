@@ -359,6 +359,13 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("cells@",  e(2, 1)); // seq i -- x
     m.insert("cells!",  e(3, 0)); // x seq i --
 
+    // growable backing for darray
+    m.insert("<rawvec>",    e(0, 1)); // -- v
+    m.insert("rawvec-push", e(2, 0)); // x v --
+    m.insert("rawvec-len",  e(1, 1)); // v -- n
+    m.insert("rawvec-at",   e(2, 1)); // i v -- x
+    m.insert("rawvec-set",  e(3, 0)); // x i v --
+
     m
 }
 

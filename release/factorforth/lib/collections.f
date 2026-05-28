@@ -41,3 +41,42 @@ CLASS: grid SLOT: w SLOT: h SLOT: cells ;
     dup grid>h rot swap (0..<?)     \ x g  (y in [0,h))
     -rot grid>w (0..<?)             \ (x in [0,w))  with the y-flag below
     and ;
+
+\ ── darray — a growable 1-D sequence ─────────────────────────────
+\
+\ (Named darray — "dynamic array" — to avoid colliding with Factor's
+\ own `vector` class in dispatch.  It is the standard library's
+\ growable vector.)  Backed by the <rawvec> store, which grows on
+\ push.  Holds any value per element, like a slot.
+
+CLASS: darray SLOT: data ;
+
+: new-darray ( -- d )  <rawvec> <darray> ;
+: d-push ( x d -- )    darray>data rawvec-push ;
+
+\ ── The collection protocol ───────────────────────────────────────
+\
+\ A small set of generics every collection implements, so algorithms
+\ written against the protocol work on any backing.  grid joins it
+\ with a linear (row-major) view alongside its 2-D at-xy.
+
+\ (`elt` / `elt!` rather than `at` / `at!`: Factor's `at` is the
+\ hashtable lookup, and a generic of the same name shadows it in the
+\ eval search path, silently breaking later output.  `elt` is ours.)
+GENERIC: size ( c -- n )           \ element count
+GENERIC: elt  ( i c -- x )         \ read element at linear index i
+GENERIC: elt! ( x i c -- )         \ write element at linear index i
+
+\ grid — linear view: w*h cells, row-major.  (Uses the class
+\ accessors grid>w / grid>h directly: METHOD: bodies are emitted
+\ before plain `:` definitions in the same compile, so a method must
+\ not forward-reference a `:` word like grid-w defined later — the
+\ auto-generated accessors are available, the wrappers are not.)
+METHOD: size ( g:grid -- n )    dup grid>w swap grid>h * ;
+METHOD: elt  ( i g:grid -- x )  grid>cells swap cells@ ;
+METHOD: elt! ( x i g:grid -- )  grid>cells swap cells! ;
+
+\ darray — the growable sequence.
+METHOD: size ( d:darray -- n )    darray>data rawvec-len ;
+METHOD: elt  ( i d:darray -- x )  darray>data rawvec-at ;
+METHOD: elt! ( x i d:darray -- )  darray>data rawvec-set ;

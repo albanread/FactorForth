@@ -416,6 +416,13 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("cells@",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-cells-at"    }),
         ("cells!",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-cells-set"   }),
 
+        // Growable backing for `darray` (Layer 1's vector).
+        ("<rawvec>",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec"      }),
+        ("rawvec-push",QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-push" }),
+        ("rawvec-len", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-len"  }),
+        ("rawvec-at",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-at"   }),
+        ("rawvec-set", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-rawvec-set"  }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

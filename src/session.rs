@@ -669,9 +669,10 @@ struct NfApi<'lib> {
 /// Helpers are prefixed `(nf-...)` by convention for "implementation
 /// detail, not a user word."
 const TOOLS_SETUP_SRC: &str = r#"
-USING: kernel math math.parser sequences arrays strings byte-arrays
-       io classes words quotations vocabs grouping namespaces
-       accessors combinators prettyprint.config forth.runtime ;
+USING: kernel math math.parser sequences arrays vectors strings
+       byte-arrays io classes words quotations vocabs grouping
+       namespaces accessors combinators prettyprint.config
+       forth.runtime ;
 IN: forth.runtime
 
 ! Map a byte to a printable ASCII char, or '.' if non-printable.
@@ -755,6 +756,16 @@ IN: forth.runtime
 : nf-cells-new ( n -- seq ) 0 <array> ;        ! n zeros
 : nf-cells-at  ( seq i -- x ) swap nth ;
 : nf-cells-set ( x seq i -- ) swap set-nth ;
+
+! Growable backing for `darray` (Layer 1's vector).  A Factor vector
+! grows on push; nth/set-nth/length index it.  Exposed as <rawvec> /
+! rawvec-push / rawvec-len / rawvec-at / rawvec-set.  Arg orders match
+! the collection protocol (index below collection where relevant).
+: nf-rawvec      ( -- v )     0 <vector> ;
+: nf-rawvec-push ( x v -- )   push ;
+: nf-rawvec-len  ( v -- n )   length ;
+: nf-rawvec-at   ( i v -- x ) nth ;
+: nf-rawvec-set  ( x i v -- ) set-nth ;
 "#;
 
 fn worker_main(

@@ -149,6 +149,53 @@ fn grid_in_bounds_is_zero_based_xy() {
     assert!(cap.contains("-1 -1 0 0 0"), "bounds flags: {cap}");
 }
 
+/// darray grows on push; size/at read it back in order.
+#[test]
+#[ignore]
+fn darray_grows_and_reads() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        10 xs d-push
+        20 xs d-push
+        30 xs d-push
+        xs size .            \ 3
+        0 xs elt .           \ 10
+        2 xs elt .           \ 30
+        \ overwrite element 1
+        99 1 xs elt!
+        1 xs elt .           \ 99
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("3 10 30 99"), "size/at/at!: {cap}");
+}
+
+/// The collection protocol is polymorphic: `size` and `at` work on a
+/// grid and a darray through the same generics — write an algorithm
+/// once, run it on either backing.
+#[test]
+#[ignore]
+fn collection_protocol_is_polymorphic() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        \ a generic word over ANY collection: print its size
+        : .size ( c -- )  size . ;
+
+        3 2 new-grid .size      \ grid: 6 cells
+        new-darray
+        dup 5 swap d-push
+        dup 6 swap d-push
+        .size                   \ darray: 2 elements
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    // 6 from the grid, 2 from the darray — same `.size` word, two types
+    assert!(cap.contains("6 2"), "polymorphic size over grid + darray: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the
