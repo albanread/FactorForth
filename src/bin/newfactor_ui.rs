@@ -40,13 +40,13 @@
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_editor_checker();
-    wf64::igui::crash_handler::install();
+    igui::crash_handler::install();
     // Warm-charcoal wallpaper for FactorForth.  Slightly distinct
     // from WF64's cool navy so running both side-by-side reads
     // at a glance — but close enough that the family resemblance
     // is preserved.  The amber brand colour in the icon pairs
     // with this warmer base.
-    wf64::igui::window::set_frame_palette(wf64::igui::window::FramePalette {
+    igui::window::set_frame_palette(igui::window::FramePalette {
         bg: 0x221E1A,  // warm charcoal
         fg: 0x4A3C2E,  // toasted-bronze dots, +~40/channel
     });
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // can interrupt the running eval without going through the
     // IDE worker's event queue (which is blocked inside
     // session.eval at the moment the user wants to abort).
-    wf64::igui::channels::set_interrupt_hook(
+    igui::channels::set_interrupt_hook(
         Some(newfactor::session::interrupt_current_session));
 
     let worker = || {
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         auto_open_console();
         run_supervisor();
     };
-    let exit_code = wf64::igui::run(Some(worker))?;
+    let exit_code = igui::run(Some(worker))?;
     std::process::exit(exit_code);
 }
 
@@ -104,7 +104,7 @@ fn install_editor_checker() {
     use newfactor::compiler::error::Span;
     use newfactor::compiler::parse::ParseError;
     use newfactor::compiler::resolve::ResolveError;
-    use wf64::igui::{install_checker, Diagnostic};
+    use igui::{install_checker, Diagnostic};
 
     fn diag_from_span(span: Span, message: String) -> Diagnostic {
         Diagnostic {
@@ -196,7 +196,7 @@ fn install_editor_checker() {
 /// SEH (caught by wf64's vectored-exception handler).
 #[cfg(windows)]
 fn run_supervisor() {
-    use wf64::igui::{crash_handler, crash_view};
+    use igui::{crash_handler, crash_view};
 
     loop {
         let join = std::thread::Builder::new()
@@ -222,8 +222,8 @@ fn run_supervisor() {
             Some(dump) => {
                 let text = crash_handler::format_dump(&dump);
                 crash_view::push(text);
-                wf64::igui::fconsole::append("∿ FactorForth thread crashed (SEH) — rebooting.");
-                wf64::igui::fconsole::append("");
+                igui::fconsole::append("∿ FactorForth thread crashed (SEH) — rebooting.");
+                igui::fconsole::append("");
                 // loop: respawn
             }
             None => return,
@@ -236,7 +236,7 @@ fn run_supervisor() {
 #[cfg(windows)]
 fn run_ide_worker() {
     use std::panic::{catch_unwind, AssertUnwindSafe};
-    use wf64::igui::fconsole;
+    use igui::fconsole;
 
     loop {
         let session = match boot_session(true) {
@@ -262,8 +262,8 @@ fn run_ide_worker() {
 
 #[cfg(windows)]
 fn run_drain_loop(mut session: newfactor::session::Session) {
-    use wf64::igui::channels::{self, IGuiEvent};
-    use wf64::igui::fconsole;
+    use igui::channels::{self, IGuiEvent};
+    use igui::fconsole;
 
     // Persistent compile context: remembers every name defined
     // across this session's evals (`: square ... ;`, `VARIABLE x`,
@@ -309,7 +309,7 @@ fn run_drain_loop(mut session: newfactor::session::Session) {
                 }
             }
             IGuiEvent::ReplSubmit { child_id } => {
-                use wf64::igui::repl_pane;
+                use igui::repl_pane;
                 let Some(source) = repl_pane::pop_input(child_id) else { continue };
                 handle_eval_repl(&mut session, &mut compile_ctx, &source, child_id);
             }
@@ -368,8 +368,8 @@ fn set_sink(sink: OutputSink) {
 
 #[cfg(windows)]
 fn deliver_line(line: String) {
-    use wf64::igui::fconsole;
-    use wf64::igui::repl_pane::{self, AppendKind};
+    use igui::fconsole;
+    use igui::repl_pane::{self, AppendKind};
     let sink = CURRENT_SINK
         .get_or_init(|| std::sync::Mutex::new(OutputSink::Console));
     let target = *sink.lock().unwrap();
@@ -386,7 +386,7 @@ fn deliver_line(line: String) {
 #[cfg(windows)]
 fn boot_session(intro: bool) -> Option<newfactor::session::Session> {
     use newfactor::session::{IoMode, Session, SessionOpts};
-    use wf64::igui::fconsole;
+    use igui::fconsole;
 
     if intro {
         fconsole::append("∿ FactorForth IDE");
@@ -467,7 +467,7 @@ fn handle_eval(
     ctx: &mut newfactor::compiler::CompileContext,
     source: &str,
 ) {
-    use wf64::igui::fconsole;
+    use igui::fconsole;
     newfactor::session::trace("ide.handle_eval",
         &format!("entry, source.len={}", source.len()));
     // Output from this eval lands in the console pane.
@@ -524,7 +524,7 @@ fn handle_eval_repl(
     source: &str,
     child_id: i64,
 ) {
-    use wf64::igui::repl_pane::{self, AppendKind};
+    use igui::repl_pane::{self, AppendKind};
     newfactor::session::trace("ide.handle_eval_repl",
         &format!("entry, source.len={}, child_id={}",
             source.len(), child_id));
@@ -569,7 +569,7 @@ fn handle_eval_repl(
 fn wait_for_frame() {
     use std::time::Duration;
     for _ in 0..200 {
-        if wf64::igui::cp_exports::FRAME_HWND.get().is_some() {
+        if igui::cp_exports::FRAME_HWND.get().is_some() {
             return;
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -586,7 +586,7 @@ fn retitle_frame() {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::SetWindowTextW;
 
-    let Some(&hwnd_isize) = wf64::igui::cp_exports::FRAME_HWND.get() else {
+    let Some(&hwnd_isize) = igui::cp_exports::FRAME_HWND.get() else {
         return;
     };
     let hwnd = HWND(hwnd_isize as *mut _);
@@ -602,11 +602,11 @@ fn retitle_frame() {
 fn auto_open_console() {
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_COMMAND};
-    let Some(&hwnd_isize) = wf64::igui::cp_exports::FRAME_HWND.get() else {
+    let Some(&hwnd_isize) = igui::cp_exports::FRAME_HWND.get() else {
         return;
     };
     let hwnd = HWND(hwnd_isize as *mut _);
-    let cmd_id = wf64::igui::fconsole::MENU_CMD_ID;
+    let cmd_id = igui::fconsole::MENU_CMD_ID;
     let _ = unsafe {
         PostMessageW(
             Some(hwnd),
@@ -621,7 +621,7 @@ fn auto_open_console() {
 
 #[cfg(windows)]
 fn report_panic(payload: Box<dyn std::any::Any + Send>) {
-    use wf64::igui::crash_view;
+    use igui::crash_view;
 
     let msg: String = if let Some(s) = payload.downcast_ref::<&'static str>() {
         s.to_string()

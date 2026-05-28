@@ -134,3 +134,42 @@ fn multi_dispatch_specificity() {
     let general_count = cap.matches("general greeting").count();
     assert_eq!(general_count, 2, "two pairs should hit the general method: {cap}");
 }
+
+/// Regression for the full-arity specializer-emit fix (#70).
+///
+/// Dispatch on a NON-top argument: the method specialises only the
+/// FIRST (deeper) input, leaving the second unspecialised.  The old
+/// emit produced a one-element class list (`{ cat }`), which
+/// multi-methods aligned to the TOP of the stack — so it dispatched
+/// on the wrong argument and no method matched.  Full-arity emit
+/// produces `{ cat object }`, correctly dispatching on the deep arg
+/// regardless of what's on top.
+#[test]
+#[ignore]
+fn dispatch_on_non_top_argument() {
+    let (s, out, mut ctx) = fresh();
+    let src = r#"
+        CLASS: cat ;
+        CLASS: dog ;
+
+        GENERIC: describe ( a b -- )
+
+        \ Dispatch on the FIRST (deeper) argument only; the second
+        \ input is left unspecialised (matches anything).
+        METHOD: describe ( a:cat b -- )  2drop ." cat-first" cr ;
+        METHOD: describe ( a:dog b -- )  2drop ." dog-first" cr ;
+
+        <cat> 42 describe      \ deep arg = cat, top = an integer
+        <dog> 99 describe      \ deep arg = dog, top = an integer
+    "#;
+    let ir = compile_in_context(src, &mut ctx).expect("compile");
+    eprintln!("IR:\n{ir}");
+    s.eval(&ir).expect("eval");
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    // Correct dispatch keys on the deep (cat/dog) argument, not the
+    // integer on top.  Under the old bug this raised a no-method
+    // dispatch error instead.
+    assert!(cap.contains("cat-first"), "cat deep-arg dispatch: {cap}");
+    assert!(cap.contains("dog-first"), "dog deep-arg dispatch: {cap}");
+}

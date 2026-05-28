@@ -71,6 +71,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "igui"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "windows-numerics",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -118,18 +126,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "embed-resource",
+ "igui",
  "libloading",
- "wf64",
  "windows",
  "zstd",
-]
-
-[[package]]
-name = "newgc-core"
-version = "0.0.0"
-dependencies = [
- "libc",
- "windows",
 ]
 
 [[package]]
@@ -295,26 +295,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20064672db26d7cdc89c7798c48a0fdfac8213434a1186e5ef29fd560ae223d6"
 dependencies = [
  "wit-bindgen",
-]
-
-[[package]]
-name = "wf64"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "embed-resource",
- "libloading",
- "newgc-core",
- "wfasm",
- "windows",
- "windows-numerics",
-]
-
-[[package]]
-name = "wfasm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
 ]
 
 [[package]]

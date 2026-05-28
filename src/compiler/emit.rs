@@ -562,6 +562,48 @@ fn ndrop(n: usize) -> String {
 /// A method with NO specialisers gets a one-element `{ object }`
 /// list — Factor's `object` class is the universal supertype,
 /// matching any value.  Behaves as the catch-all method.
+/// Emit the multi-methods specializer list `{ c0 c1 ... }` for a
+/// method, **one entry per input, in input order**, using `object`
+/// for any position the user didn't specialise.
+///
+/// This full-arity form is the correctness fix for multi-dispatch:
+/// `multi-methods` aligns the class list positionally against the
+/// stack inputs (leftmost class = deepest input, rightmost = top of
+/// stack).  Emitting only the specialised classes — the old
+/// behaviour — produced a list shorter than the arity, which
+/// multi-methods aligned to the *top* positions.  That silently
+/// dispatched on the wrong argument whenever the specialised slot
+/// wasn't already on top (e.g. `foo ( a:cat b -- )` dispatched on
+/// `b`, not `a`).  It only ever "worked" because every method we'd
+/// written so far specialised the top arg or all args.
+///
+/// CLOS does exactly this: every required parameter carries a
+/// specializer, defaulting to `t` (our `object`) for "don't care".
+/// Positions that are `object` across all of a generic's methods
+/// cost nothing — multi-methods doesn't branch on them — so dispatch
+/// stays cheap and is pay-for-what-you-use.
+fn emit_specializer_list(m: &super::ast::MethodDef, out: &mut String) {
+    let n_inputs = m.effect.inputs.len();
+    out.push_str("{ ");
+    if n_inputs == 0 {
+        // Degenerate: a generic with no inputs can't dispatch on
+        // anything.  Emit a single `object` so the syntax is well
+        // formed; such a method is nonsensical but shouldn't crash
+        // the emitter.
+        out.push_str("object ");
+    } else {
+        for pos in 0..n_inputs {
+            let cls = m.specializers.iter()
+                .find(|s| s.position as usize == pos)
+                .map(|s| s.class_name.to_ascii_lowercase())
+                .unwrap_or_else(|| "object".to_string());
+            out.push_str(&cls);
+            out.push(' ');
+        }
+    }
+    out.push('}');
+}
+
 fn emit_method(
     m: &super::ast::MethodDef,
     r: &Sema,
@@ -593,16 +635,9 @@ fn emit_method(
     // supertype).
     out.push_str("multi-methods:METHOD: ");
     out.push_str(&target);
-    out.push_str(" { ");
-    if m.specializers.is_empty() {
-        out.push_str("object ");
-    } else {
-        for s in &m.specializers {
-            out.push_str(&s.class_name.to_ascii_lowercase());
-            out.push(' ');
-        }
-    }
-    out.push_str("} ");
+    out.push_str(" ");
+    emit_specializer_list(m, out);
+    out.push_str(" ");
     // Method body runs through the same emit_exprs path as a `:` def.
     if super::lower_exit::body_uses_exit(&m.body, &r.word_targets) {
         out.push_str("[ ");

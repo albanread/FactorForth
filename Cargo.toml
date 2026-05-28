@@ -46,7 +46,12 @@ path = "src/bin/compress_image.rs"
 #             dependency on the import library.
 
 [dependencies]
-wf64       = { path = "../WF64" }
+# igui — our own Direct2D/DirectWrite MDI shell, forked from WF64's
+# igui into crates/igui.  We depend on the window shell ONLY; we do
+# NOT pull in WF64's Forth runtime, JASM assembler, or NewGC collector
+# (we use Factor for all of that).  This is the decoupling: a broken
+# sibling GC can never break our build again.
+igui       = { path = "crates/igui" }
 anyhow     = "1"
 libloading = "0.8"
 # zstd: image-compression for distribution.  The Factor bootstrap image

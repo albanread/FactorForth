@@ -774,7 +774,7 @@ fn worker_main(
     //
     // Truly unrecoverable Rust panics on this thread are still
     // caught by catch_unwind at the Session::new spawn site.
-    wf64::igui::crash_handler::install();
+    igui::crash_handler::install();
 
     // factor.dll likes its own directory as cwd (looks for sibling
     // DLLs etc.).  Mirror what embed-smoke does.
@@ -1379,7 +1379,7 @@ pub extern "C-unwind" fn nf_rt_command_done() {
 // Factor's `nf-publish-datastack` calls these three between
 // each eval and the matching `nf_rt_command_done`.  Begin
 // resets a thread-local buffer, item appends, end publishes
-// the snapshot to wf64::igui::stack_view.  Top-of-stack-first
+// the snapshot to igui::stack_view.  Top-of-stack-first
 // ordering matches what stack_view::publish expects.
 
 thread_local! {
@@ -1408,7 +1408,7 @@ pub extern "C-unwind" fn nf_rt_stack_end() {
     // wf64's stack_view is the iGui's data-stack pane.  Posting
     // an update is best-effort — if the pane isn't open it's a
     // no-op (just stashes the snapshot).
-    wf64::igui::stack_view::publish(cells);
+    igui::stack_view::publish(cells);
 }
 
 extern "C" {
