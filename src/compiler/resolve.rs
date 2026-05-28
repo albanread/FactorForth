@@ -113,7 +113,7 @@ impl std::error::Error for ResolveError {}
 /// default search path (e.g. `.` exists in `prettyprint` and in
 /// `forth.runtime`); emit fully qualified to avoid the parser's
 /// "resolves to more than one word" error.
-fn builtin_table() -> HashMap<&'static str, Target> {
+pub fn builtin_table() -> HashMap<&'static str, Target> {
     use Target::*;
     let entries: &[(&str, Target)] = &[
         // Stack words ─ kernel
@@ -679,6 +679,13 @@ fn resolve_exprs(
                 // We don't insert into word_targets — emit derives
                 // the storage symbol from the name directly.  Resolve's
                 // job here is just the existence check.
+            }
+            Expr::See { .. } => {
+                // SEE's target is not a word reference — it's an
+                // introspection target resolved at emit time against
+                // the doc store.  No resolution needed here; an
+                // unknown target is reported at emit (and prints a
+                // friendly "unknown word" rather than failing compile).
             }
             Expr::If { then_body, else_body, .. } => {
                 resolve_exprs(then_body, builtins, user_words, value_names, out)?;

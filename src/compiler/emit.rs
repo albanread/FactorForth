@@ -614,6 +614,92 @@ fn emit_method(
     out.push_str(" ;\n");
 }
 
+/// Render a count-based effect (`inputs`, `outputs`) as a Forth-style
+/// `( a b -- c )` with generic single-letter names.  Used for builtin
+/// SEE reports, where we know the arity but not the parameter names.
+fn render_effect_counts(inputs: u32, outputs: u32) -> String {
+    let letter = |i: u32| -> String {
+        // a, b, c, ... then x0, x1, ... past the alphabet.
+        if i < 26 {
+            ((b'a' + i as u8) as char).to_string()
+        } else {
+            format!("x{}", i - 26)
+        }
+    };
+    let mut s = String::from("( ");
+    for i in 0..inputs { s.push_str(&letter(i)); s.push(' '); }
+    s.push_str("-- ");
+    for o in 0..outputs { s.push_str(&letter(inputs + o)); s.push(' '); }
+    s.push(')');
+    s
+}
+
+/// Build the `SEE name` report and emit it as a literal print.
+///
+/// For a user definition we have a `WordDoc` (kind / effect / source
+/// / detail) in `r.docs` — that's the rich case, showing the actual
+/// ANS source.  For a builtin we consult the resolver + effect tables
+/// for its Factor target and arity.  Otherwise we report it unknown.
+/// The whole report is built here in Rust and lowered to a single
+/// `"...text..." print-string`, so SEE costs nothing at runtime
+/// beyond the print.
+fn emit_see(name: &str, r: &Sema, out: &mut String) {
+    let lc = name.to_ascii_lowercase();
+    let mut report = String::new();
+
+    if let Some(doc) = r.docs.get(&lc) {
+        report.push_str(name);
+        report.push_str("   ");
+        report.push_str(&doc.kind);
+        if !doc.effect.is_empty() {
+            report.push_str("   ");
+            report.push_str(&doc.effect);
+        }
+        report.push('\n');
+        if !doc.detail.is_empty() {
+            report.push_str("  ");
+            report.push_str(&doc.detail);
+            report.push('\n');
+        }
+        if !doc.source.is_empty() {
+            report.push_str("  source:\n");
+            for line in doc.source.lines() {
+                report.push_str("    ");
+                report.push_str(line);
+                report.push('\n');
+            }
+        }
+    } else {
+        let builtins = super::resolve::builtin_table();
+        if let Some(target) = builtins.get(lc.as_str()) {
+            report.push_str(name);
+            report.push_str("   builtin");
+            let effects = super::effect::builtin_effects();
+            if let Some(super::effect::Effect::Known { inputs, outputs }) =
+                effects.get(lc.as_str())
+            {
+                report.push_str("   ");
+                report.push_str(&render_effect_counts(*inputs, *outputs));
+            }
+            report.push_str("\n  factor: ");
+            report.push_str(&target.to_factor_token());
+            report.push('\n');
+        } else {
+            report.push_str(name);
+            report.push_str("   (unknown word — not defined this session)\n");
+        }
+    }
+
+    // Lower to a single literal print.  Escape for a Factor string
+    // literal: backslash, quote, and newline (Factor reads `\n` in a
+    // string literal as a newline char).
+    let escaped = report
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    write!(out, "\"{escaped}\" forth.runtime:print-string").unwrap();
+}
+
 /// The accessor uses `nf-addr+` rather than `+` because + on an
 /// nf-addr fails (our address model is opaque).  Future
 /// optimisation: emit Factor `specialized-array`s when the
@@ -1213,6 +1299,12 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
             let lc = name.to_ascii_lowercase();
             let storage = value_storage_name(&lc);
             write!(out, "{storage} set-global").unwrap();
+        }
+
+        // `SEE name` — build a compile-time introspection report
+        // and lower it to a literal print.  See `emit_see`.
+        Expr::See { name, .. } => {
+            emit_see(name, r, out);
         }
 
         // LET form: lower to Factor `[| ... | ... ] call( ... )`

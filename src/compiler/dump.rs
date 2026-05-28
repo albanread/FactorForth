@@ -265,6 +265,9 @@ fn write_expr(out: &mut String, e: &Expr, depth: usize) {
         Expr::To { name, span } => {
             let _ = writeln!(out, "{indent}To `{name}` @ {}", span_str(span));
         }
+        Expr::See { name, span } => {
+            let _ = writeln!(out, "{indent}See `{name}` @ {}", span_str(span));
+        }
         Expr::LetForm { form, span } => {
             let _ = writeln!(out, "{indent}LetForm @ {}", span_str(span));
             let _ = writeln!(out, "{indent}  inputs:  {:?}", form.inputs);

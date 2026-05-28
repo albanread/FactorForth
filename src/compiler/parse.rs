@@ -880,6 +880,30 @@ impl<'t> Parser<'t> {
                             span: Span { start: t_span.start, end },
                         })
                     }
+                    // `SEE name` — introspection parsing word.  Like
+                    // `'` and `TO`, consumes the next blank-delimited
+                    // token as its target.  Emit builds a compile-time
+                    // report (kind / effect / origin / source) for the
+                    // named word and lowers it to a literal print.
+                    "see" => {
+                        self.bump(); // consume `see`
+                        let name_tok = self.peek().ok_or(
+                            ParseError::ExpectedDefiningName {
+                                keyword: "SEE", at: t_span,
+                            },
+                        )?;
+                        let (name, end) = match &name_tok.kind {
+                            Tok::Word(w) => (w.clone(), name_tok.span.end),
+                            _ => return Err(ParseError::ExpectedDefiningName {
+                                keyword: "SEE", at: t_span,
+                            }),
+                        };
+                        self.bump(); // consume target name
+                        Ok(Expr::See {
+                            name,
+                            span: Span { start: t_span.start, end },
+                        })
+                    }
                     // Terminators leaking through to here means they
                     // weren't inside a matching opener.
                     "else" | "then" | "until" | "while" | "repeat"

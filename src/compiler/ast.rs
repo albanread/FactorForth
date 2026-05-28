@@ -110,6 +110,30 @@ pub enum Item {
     RawFactor(RawFactorItem),
 }
 
+/// Introspection record for one defined name, consumed by `SEE`.
+///
+/// Built at compile time from the AST + the original source text,
+/// and persisted across evals in `CompileContext.docs` so `SEE`
+/// works on words defined in an earlier REPL line.  Everything here
+/// is a pre-rendered string so emit can splice it straight into a
+/// literal print without re-deriving anything.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct WordDoc {
+    /// Human-readable kind: "colon definition", "generic", "method",
+    /// "constant", "variable", "value", "class", "collection",
+    /// "template".
+    pub kind: String,
+    /// Rendered stack effect, e.g. "( n -- n2 )".  Empty when the
+    /// definition carries no effect annotation.
+    pub effect: String,
+    /// The original ANS source text of the definition, verbatim.
+    /// Empty when not retained (e.g. builtins).
+    pub source: String,
+    /// Optional one-line extra detail (e.g. a class's slot list, or
+    /// a constant's value).  Empty when nothing to add.
+    pub detail: String,
+}
+
 /// `CLASS:` declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClassDef {
@@ -493,6 +517,18 @@ pub enum Expr {
     /// on the VALUE's underlying Factor global.  Effect: `( x -- )`.
     To { name: String, span: Span },
 
+    /// `SEE name` — the Programming-Tools introspection word.  Parsed
+    /// like `'` and `TO` (the next blank-delimited token is the
+    /// target).  At emit time the compiler looks up everything it
+    /// knows about `name` — kind, declared stack effect, origin
+    /// (user definition vs builtin), and the retained original ANS
+    /// source — and emits code that prints that report.  Effect:
+    /// `( -- )`.  This is a compile-time word: the report is built
+    /// in the Rust front end (which holds the source and sema
+    /// metadata) and lowered to a literal print, rather than
+    /// introspecting the live Factor word at runtime.
+    See { name: String, span: Span },
+
     /// `LET (inputs) -> (outputs) = expr,... [WHERE ...]* END` —
     /// the infix-algebraic sub-language.  Parsed by `let_lang`
     /// at lex time (the lexer captures the whole block as a
@@ -547,6 +583,7 @@ impl Expr {
             Expr::Case             { span, .. } => *span,
             Expr::Tick             { span, .. } => *span,
             Expr::To               { span, .. } => *span,
+            Expr::See              { span, .. } => *span,
             Expr::LetForm          { span, .. } => *span,
         }
     }

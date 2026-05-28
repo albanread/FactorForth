@@ -167,6 +167,15 @@ pub struct Sema {
 
     // ── From sema::escape (M2.8) ─────────────────────────────────
     pub escape: HashMap<String, EscapeState>,
+
+    // ── For SEE introspection ────────────────────────────────────
+    /// Lowercase name → its introspection record (kind, effect,
+    /// source, detail).  Populated by the driver in `mod.rs` after
+    /// the build (it needs the original source text, which the
+    /// sema build doesn't carry), seeded with prior-eval docs from
+    /// `CompileContext.docs` so `SEE` works cross-eval.  Read by
+    /// emit's `Expr::See` arm.
+    pub docs: HashMap<String, super::ast::WordDoc>,
 }
 
 // ─── Builder ───────────────────────────────────────────────────────────────
@@ -486,6 +495,7 @@ pub fn build_with_prior_state(
         call_graph: BTreeMap::new(),
         use_sites: BTreeMap::new(),
         escape: HashMap::new(),
+        docs: HashMap::new(),
     };
 
     analyse_call_graph(&mut sema);
@@ -877,6 +887,14 @@ fn walk_body_for_refs(exprs: &[Expr], caller: Option<&str>, sema: &mut Sema) {
             Expr::LetForm { .. } => {
                 // LET forms are self-contained — no external word
                 // refs, no use-sites for the sema graph to record.
+            }
+            Expr::See { name, span } => {
+                // SEE records a use-site for its target so a word that
+                // is *only* ever SEEn still counts as referenced (and
+                // doesn't get flagged dead).  No call-graph edge — SEE
+                // doesn't call the word, it describes it.
+                let lc = name.to_ascii_lowercase();
+                sema.use_sites.entry(lc).or_default().push(*span);
             }
         }
     }

@@ -97,6 +97,14 @@ pub struct CompileContext {
     /// remember enough metadata on our side to compile against
     /// it from later evals.
     pub classes: std::collections::HashMap<String, Vec<String>>,
+
+    /// Lowercase name → its `SEE` introspection record.  Persisted
+    /// across evals so `SEE foo` works on a `foo` defined in an
+    /// earlier REPL line.  Built from each compile's AST + source by
+    /// [`build_docs`]; newest definition wins (matching Factor's
+    /// redefinition semantics).  A few KB of strings per session —
+    /// the cost of retaining source is negligible.
+    pub docs: std::collections::HashMap<String, ast::WordDoc>,
 }
 
 impl CompileContext {
@@ -197,6 +205,14 @@ pub fn compile_in_context_with_diagnostics(
         };
     }
 
+    // Build SEE docs for definitions in THIS compile, then seed
+    // sema.docs with prior-eval docs first so cross-eval `SEE` works
+    // and this compile's (newer) definitions overwrite stale ones.
+    sema.docs = ctx.docs.clone();
+    for (name, doc) in build_docs(&sema.program.items, source) {
+        sema.docs.insert(name, doc);
+    }
+
     let warnings = sema.effect_errors.clone();
     let ir = emit(&sema, &EmitOpts::default());
     // Merge new defs into the persistent context for subsequent
@@ -223,5 +239,108 @@ pub fn compile_in_context_with_diagnostics(
     for (name, slots) in &sema.class_slots {
         ctx.classes.insert(name.clone(), slots.clone());
     }
+    // Persist this compile's SEE docs (sema.docs already holds prior
+    // docs + this compile's, with this compile's winning).
+    ctx.docs = sema.docs.clone();
     Ok((ir, warnings))
+}
+
+/// Render a parsed `StackEffect` back to canonical `( a b -- c )`
+/// text for display in `SEE`.  Returns the empty string when there
+/// is no effect to show.
+fn render_effect(e: &ast::StackEffect) -> String {
+    let mut s = String::from("( ");
+    for i in &e.inputs { s.push_str(i); s.push(' '); }
+    s.push_str("-- ");
+    for o in &e.outputs { s.push_str(o); s.push(' '); }
+    s.push(')');
+    s
+}
+
+/// Build per-name [`ast::WordDoc`] records for every definition in a
+/// compile, slicing the original source text for the `source` field.
+/// Keyed by lowercased name.  Used by [`compile_in_context_with_diagnostics`]
+/// to feed `SEE`.
+///
+/// Methods are intentionally skipped: a `METHOD:` shares its
+/// generic's name, so recording it would clobber the generic's doc.
+/// `SEE genericname` shows the generic; per-method listing is a
+/// follow-up that needs a generic→methods map.
+pub fn build_docs(
+    items: &[ast::Item],
+    source: &str,
+) -> std::collections::HashMap<String, ast::WordDoc> {
+    use ast::Item;
+    let mut out = std::collections::HashMap::new();
+    // Slice source[span] safely on byte boundaries.
+    let slice = |span: &error::Span| -> String {
+        let start = span.start.byte_offset as usize;
+        let end = span.end.byte_offset as usize;
+        source.get(start..end)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    for item in items {
+        let (name, kind, effect, src, detail) = match item {
+            Item::Definition(d) => (
+                d.name.clone(), "colon definition",
+                d.effect.as_ref().map(render_effect).unwrap_or_default(),
+                slice(&d.span), String::new(),
+            ),
+            Item::Generic(g) => (
+                g.name.clone(), "generic",
+                render_effect(&g.effect), slice(&g.span), String::new(),
+            ),
+            Item::Constant(c) => {
+                let detail = match &c.value {
+                    ast::ConstValue::Int(v)   => format!("value: {v}"),
+                    ast::ConstValue::Float(v) => format!("value: {v}"),
+                    ast::ConstValue::Computed(_) => "value: (computed)".to_string(),
+                };
+                (c.name.clone(), "constant", String::new(), slice(&c.span), detail)
+            }
+            Item::Variable(v) => (
+                v.name.clone(), "variable", String::new(), slice(&v.span), String::new(),
+            ),
+            Item::Value(v) => (
+                v.name.clone(), "value", String::new(), slice(&v.span), String::new(),
+            ),
+            Item::Class(c) => {
+                let slots = c.slots.iter()
+                    .map(|s| s.name.clone()).collect::<Vec<_>>().join(" ");
+                let mut detail = if slots.is_empty() {
+                    "slots: (none)".to_string()
+                } else {
+                    format!("slots: {slots}")
+                };
+                if let Some(parent) = &c.extends {
+                    detail.push_str(&format!("   extends: {parent}"));
+                }
+                (c.name.clone(), "class", String::new(), slice(&c.span), detail)
+            }
+            Item::Collection(cl) => (
+                cl.name.clone(), "collection", String::new(), slice(&cl.span), String::new(),
+            ),
+            Item::Create(cd) => (
+                cd.name.clone(), "data buffer (CREATE)", String::new(),
+                slice(&cd.span), String::new(),
+            ),
+            Item::Template(t) => (
+                t.name.clone(), "defining word (CREATE/DOES>)", String::new(),
+                slice(&t.span), String::new(),
+            ),
+            // Methods share the generic's name (skip — see doc above);
+            // TemplateInstance / RawFactor / TopLevel aren't named
+            // definitions a user would `SEE`.
+            _ => continue,
+        };
+        out.insert(name.to_ascii_lowercase(), ast::WordDoc {
+            kind: kind.to_string(),
+            effect,
+            source: src,
+            detail,
+        });
+    }
+    out
 }

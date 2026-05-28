@@ -162,7 +162,7 @@ impl std::error::Error for EffectError {}
 /// The effect of every ANS word resolve knows about.  Keys are
 /// ANS-lowercased names (matching `resolve::builtin_table`'s keys).
 /// Values are net data-stack effects.
-fn builtin_effects() -> HashMap<&'static str, Effect> {
+pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     use Effect::Known as K;
     let e = |i, o| K { inputs: i, outputs: o };
     let mut m: HashMap<&'static str, Effect> = HashMap::new();
@@ -793,6 +793,12 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
             // outputs.len() cells.  Static and known.
             Effect::known(form.inputs.len() as u32,
                           form.outputs.len() as u32)
+        }
+
+        Expr::See { .. } => {
+            // `SEE name` prints a report and touches nothing on the
+            // data stack.
+            Effect::known(0, 0)
         }
     }
 }
