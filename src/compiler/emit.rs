@@ -670,10 +670,16 @@ fn emit_see(name: &str, r: &Sema, out: &mut String) {
             }
         }
     } else {
+        // A builtin: report it as a core word with its stack effect.
+        // We deliberately do NOT show the Factor word it lowers to —
+        // the user writes ANS Forth and sees ANS Forth; the Factor
+        // substrate stays invisible.  (Some Forths' SEE prints a
+        // machine-code disassembly; ours has no assembler to show,
+        // and equally no business showing Factor.)
         let builtins = super::resolve::builtin_table();
-        if let Some(target) = builtins.get(lc.as_str()) {
+        if builtins.contains_key(lc.as_str()) {
             report.push_str(name);
-            report.push_str("   builtin");
+            report.push_str("   builtin (core word)");
             let effects = super::effect::builtin_effects();
             if let Some(super::effect::Effect::Known { inputs, outputs }) =
                 effects.get(lc.as_str())
@@ -681,8 +687,6 @@ fn emit_see(name: &str, r: &Sema, out: &mut String) {
                 report.push_str("   ");
                 report.push_str(&render_effect_counts(*inputs, *outputs));
             }
-            report.push_str("\n  factor: ");
-            report.push_str(&target.to_factor_token());
             report.push('\n');
         } else {
             report.push_str(name);

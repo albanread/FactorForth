@@ -46,11 +46,13 @@ fn see_colon_definition_shows_source() {
     assert!(cap.contains("dup *"), "source body expected: {cap}");
 }
 
-/// SEE on a builtin shows it's a builtin, its arity, and the Factor
-/// word it maps to.
+/// SEE on a builtin shows it's a core word and its stack effect —
+/// but deliberately NOT the Factor word it lowers to.  The user
+/// writes ANS Forth and sees ANS Forth; the Factor substrate stays
+/// invisible.
 #[test]
 #[ignore]
-fn see_builtin_shows_factor_target() {
+fn see_builtin_is_factor_free() {
     let (s, out, mut ctx) = fresh();
     let src = r#"
         see dup
@@ -61,12 +63,13 @@ fn see_builtin_shows_factor_target() {
     let cap = captured(&out);
     eprintln!("captured: {cap:?}");
     assert!(cap.contains("dup"), "name expected: {cap}");
-    assert!(cap.contains("builtin"), "builtin tag expected: {cap}");
-    // dup maps to Factor's `dup` (a bare kernel word in the default
-    // search path, so our Target carries no vocab prefix).
-    assert!(cap.contains("factor: dup"), "factor target expected: {cap}");
+    assert!(cap.contains("builtin (core word)"), "core-word tag expected: {cap}");
     // arity: dup is ( a -- a a ) — one in, two out
     assert!(cap.contains("( a -- "), "arity expected: {cap}");
+    // No Factor leakage: the report must not mention `factor:` or
+    // any Factor vocab path.
+    assert!(!cap.contains("factor:"), "must not leak Factor target: {cap}");
+    assert!(!cap.contains("kernel:"), "must not leak Factor vocab: {cap}");
 }
 
 /// SEE on a constant shows the kind and the value.
