@@ -59,6 +59,11 @@ read -r -d '' FACTOR_EXPR <<'EOF' || true
 USING: vocabs.loader namespaces init ;
 << "E:/NewFactor/factor" add-vocab-root >>
 USING: forth.runtime forth.wf64-gfx alien.remote-control ;
+! math.libm carries the libm FUNCTION-ALIASes (fatan2, fsin, …) that
+! the LET DSL targets for transcendental 2-arg calls like atan2.  Pull
+! it in so `math.libm:fatan2` resolves at runtime; on Windows the
+! `libm` FFI maps onto the CRT math functions.
+USE: math.libm
 ! `multi-methods` lives in extra/.  We load it here so the
 ! resulting image has it baked in — at runtime our deployed
 ! factor.dll has no access to the Factor source tree and

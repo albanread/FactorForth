@@ -134,3 +134,89 @@ fn v_plus_is_one_generic_two_types() {
     assert!(cap.contains("vm=10."), "v+ then vmag on vec2: {cap}");
     assert!(cap.contains("cm=10."), "v+ then vmag on complex: {cap}");
 }
+
+/// vec2-specific enrichments: normalize (unit vector) and perp (rotate
+/// 90° left).
+#[test]
+#[ignore]
+fn vec2_extras() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, NUMERICS);
+    run(&s, &mut ctx, r#"
+        \ normalize (3,4) -> (0.6, 0.8); its magnitude is 1.
+        3.0e 4.0e <vec2> normalize VALUE u
+        ." nx=" u vec2>x .          \ 0.6
+        ." ny=" u vec2>y .          \ 0.8
+        ." nm=" u vmag .            \ 1.0
+
+        \ perp (3,4) -> (-4,3)
+        3.0e 4.0e <vec2> perp VALUE p
+        ." px=" p vec2>x .          \ -4.0
+        ." py=" p vec2>y .          \ 3.0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("nx=0.6") && cap.contains("ny=0.8"), "normalize: {cap}");
+    assert!(cap.contains("nm=1."), "normalized magnitude: {cap}");
+    assert!(cap.contains("px=-4.") && cap.contains("py=3."), "perp: {cap}");
+}
+
+/// complex-specific enrichments: phase (argument), recip (1/z), c/ (full
+/// division).
+#[test]
+#[ignore]
+fn complex_extras() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, NUMERICS);
+    run(&s, &mut ctx, r#"
+        \ phase(0+1i) = atan2(1,0) = pi/2 ~ 1.5707963
+        0.0e 1.0e <complex> phase ." ph=" .
+
+        \ recip(1+1i) = conj/|z|^2 = (1-1i)/2 = 0.5 - 0.5i
+        1.0e 1.0e <complex> recip VALUE r
+        ." rr=" r complex>re .      \ 0.5
+        ." ri=" r complex>im .      \ -0.5
+
+        \ (4+2i)/(1+1i) = (6-2i)/2 = 3 - 1i
+        4.0e 2.0e <complex>  1.0e 1.0e <complex>  c/  VALUE q
+        ." qr=" q complex>re .      \ 3.0
+        ." qi=" q complex>im .      \ -1.0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("ph=1.5707"), "phase: {cap}");
+    assert!(cap.contains("rr=0.5") && cap.contains("ri=-0.5"), "recip: {cap}");
+    assert!(cap.contains("qr=3.") && cap.contains("qi=-1."), "c/: {cap}");
+}
+
+/// The derived protocol word `vneg` is written ONCE over the `vscale`
+/// generic — so the SAME definition serves vec2 AND complex.  This is
+/// the protocol payoff: a new type joins for free, no per-type code.
+///
+/// (Derived words over the 2-class generics v+/v- — vdist, vlerp, vmid
+/// — are held back pending a multi-dispatch-from-colon finalization
+/// fix; the direct v+/v- calls are covered by the tests above.)
+#[test]
+#[ignore]
+fn derived_protocol_polymorphic() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, NUMERICS);
+    run(&s, &mut ctx, r#"
+        \ vneg on a vec2 -> (-3,-4)
+        3.0e 4.0e <vec2> vneg VALUE n
+        ." vnx=" n vec2>x .                          \ -3.0
+        ." vny=" n vec2>y .                          \ -4.0
+
+        \ the SAME vneg on a complex -> (-1,-2)
+        1.0e 2.0e <complex> vneg VALUE c
+        ." cnr=" c complex>re .                      \ -1.0
+        ." cni=" c complex>im .                      \ -2.0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("vnx=-3.") && cap.contains("vny=-4."), "vneg vec2: {cap}");
+    assert!(cap.contains("cnr=-1.") && cap.contains("cni=-2."), "vneg complex (same word): {cap}");
+}

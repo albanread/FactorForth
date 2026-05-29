@@ -74,6 +74,12 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     set.insert("math.functions");
     set.insert("math.order");
     set.insert("math.constants");
+    // math.libm holds the libm FUNCTION-ALIASes the LET codegen targets
+    // for 2-arg transcendentals (atan2 -> math.libm:fatan2).  Without
+    // it in USING, the embedded eval can't resolve the qualified ref
+    // even though the word is in the image.  Baked into our image via
+    // build-image.sh's `USE: math.libm`.
+    set.insert("math.libm");
     // Object-system vocabs.  `classes.tuple` for TUPLE: and
     // `accessors` for slot accessors are always needed when any
     // class-system item is present.  For generics + methods we

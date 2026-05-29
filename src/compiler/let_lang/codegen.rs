@@ -222,7 +222,10 @@ fn factor_call_target(name: &str) -> &'static str {
         "asin"  => "math.functions:asin",
         "acos"  => "math.functions:acos",
         "atan"  => "math.functions:atan",
-        "atan2" => "math.functions:atan2",
+        // atan2 lives in math.libm (a libm FUNCTION-ALIAS); math.functions
+        // has no `atan2` — it uses `fatan2` internally for `arg`.  Called
+        // as ( y x -- angle ), matching atan2(y, x).
+        "atan2" => "math.libm:fatan2",
         "exp"   => "math.functions:exp",
         "log"   => "math.functions:log",
         "pow"   => "math.functions:^",
