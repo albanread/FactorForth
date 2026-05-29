@@ -6,6 +6,27 @@
 //! to be kept in lockstep with the WF64 version where the
 //! grammar evolves; the Factor-specific work lives in
 //! `codegen.rs`.
+//!
+//! ## A deliberate seam: Forth on the outside, algebra on the inside
+//!
+//! A LET form has two halves that obey different rules ON PURPOSE:
+//!
+//!   * The `( … ) -> ( … )` name lists are the **Forth side** — they
+//!     describe what leaves and re-enters the data stack (a stack
+//!     effect, really).  Forth doesn't punctuate those, so separators
+//!     here are flexible: spaces, commas, or both (`input_list` and
+//!     `output_list` skip commas as if whitespace).
+//!
+//!   * The `= … END` body is the **DSL side** — an infix expression
+//!     evaluator with its own grammar (precedence, `^`, `sqrt(…)`,
+//!     unary minus).  It is intentionally NOT Forth.  The comma
+//!     between multi-valued results (`parse_form`'s results loop) is
+//!     real grammar, not optional punctuation: DSL expressions contain
+//!     spaces, so `a + b  a - b` has no unambiguous split without it.
+//!
+//! In one line: the parentheses speak Forth; the equals-body speaks
+//! algebra.  Keep separator flexibility on the name lists; never make
+//! the result comma optional.
 
 use std::fmt;
 

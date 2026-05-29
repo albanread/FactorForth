@@ -24,6 +24,29 @@ END
 - The expression is plain infix arithmetic with the usual
   precedence: `* /` before `+ -`, parentheses override.
 
+## Two grammars, one form
+
+A LET form has a deliberate seam in the middle, and the two halves obey
+different rules on purpose:
+
+- **The `( … ) -> ( … )` lists are the Forth side.**  They name what
+  comes off the stack and what goes back on — essentially a stack
+  effect.  Forth doesn't punctuate those, so neither do we: names are
+  separated by spaces, commas, or both.  `(a b)`, `(a, b)`, and
+  `(a:point as x y  b)` all parse.
+
+- **The `= … END` body is the DSL side.**  It is *not* Forth — it's an
+  infix expression evaluator with its own grammar: precedence, `^`,
+  `sqrt(…)`, unary minus.  Here a comma is a real piece of syntax (the
+  separator between the components of a multi-valued result), exactly as
+  in `(x, y)` on paper.  It is required, because DSL expressions contain
+  spaces — `a + b  a - b` has no unambiguous split without it.
+
+So the rule, in one line: **the parentheses speak Forth; the
+equals-body speaks algebra.**  The separator flexibility lives only on
+the Forth side; the comma inside the body is grammar, not optional
+punctuation.
+
 At compile time, the LET block flows through four steps — you
 write the formula, the compiler hands the VM postfix stack ops:
 
@@ -96,10 +119,13 @@ parens if you mean the latter: `sqrt (b * c)`.
 ;
 ```
 
-Outputs are comma-separated.  Note: the right-hand side gets
-parsed once but bindings are resolved in order, so you can
-reference earlier outputs in later ones (`q` is bound before
-`r` is computed).
+The output **names** `(q r)` may be separated by spaces or commas,
+just like the inputs — see *Two grammars* below.  The result
+**expressions** on the right of `=` are always comma-separated; that
+comma is part of the DSL grammar, not optional punctuation.  The
+right-hand side is parsed once but bindings resolve in order, so you can
+reference an earlier output in a later one (`q` is bound before `r` is
+computed).
 
 ## When NOT to use LET
 
