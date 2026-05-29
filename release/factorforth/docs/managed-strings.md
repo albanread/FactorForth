@@ -26,76 +26,79 @@ should use managed strings.
 
 ## Vocabulary
 
-### Construction
+### Construction & conversion
 
-| word             | effect                              |
-|------------------|-------------------------------------|
-| `S$" hello"`     | ( -- $ ; literal )                  |
-| `>$`             | ( c-addr u -- $ ; from raw )        |
-| `n>$`            | ( n -- $ ; convert number to string ) |
-| `$"  ... "`      | (parses as `>$`)                    |
+| word             | effect                                |
+|------------------|---------------------------------------|
+| `S$" hello"`     | ( -- $ ; managed-string literal )     |
+| `>$`             | ( c-addr u -- $ ; from raw )          |
+| `$>addr`         | ( $ -- c-addr u ; to raw )            |
+| `int>$`          | ( n -- $ ; number to managed string ) |
+| `$>int`          | ( $ -- n ; parse to integer )         |
+
+(`n>$` also exists, but it yields a **raw** `c-addr u`, not a managed
+`$` — use `int>$` for a managed string.)
 
 ### Inspection
 
 | word             | effect                              |
 |------------------|-------------------------------------|
-| `$len`           | ( $ -- n )                          |
+| `$len`           | ( $ -- n ; length )                 |
+| `$hash`          | ( $ -- n ; hash code )              |
 | `$.`             | ( $ -- ; print )                    |
-| `$>`             | ( $ -- c-addr u ; to raw )          |
+| `$.cr`           | ( $ -- ; print then newline )       |
 
 ### Manipulation
 
 | word             | effect                                  |
 |------------------|-----------------------------------------|
-| `$cat`           | ( $a $b -- $ab )                        |
-| `$substr`        | ( $ start len -- $ )                    |
+| `$+`             | ( $a $b -- $ab ; concatenate )          |
+| `$slice`         | ( $ start len -- $ ; substring )        |
 | `$upper`         | ( $ -- $ ; uppercase copy )             |
 | `$lower`         | ( $ -- $ ; lowercase copy )             |
-| `$trim`          | ( $ -- $ ; strip leading/trailing ws )  |
-| `$reverse`       | ( $ -- $ ; reversed copy )              |
 
 ### Comparison
 
 | word             | effect                              |
 |------------------|-------------------------------------|
-| `$=`             | ( $a $b -- ? )                      |
-| `$<>`            | ( $a $b -- ? )                      |
-| `$cmp`           | ( $a $b -- n ; <0 == 0 > 0 )        |
+| `$cmp`           | ( $a $b -- n ; <0 / 0 / >0 )        |
+
+There's no dedicated `$=`; test equality with `$cmp 0=`.
 
 ### Searching
 
 | word             | effect                              |
 |------------------|-------------------------------------|
-| `$index`         | ( haystack needle -- pos \| -1 )    |
-| `$contains`      | ( hay needle -- ? )                 |
-| `$starts-with`   | ( $ prefix -- ? )                   |
-| `$ends-with`     | ( $ suffix -- ? )                   |
+| `$find`          | ( hay needle -- index )             |
+| `$contains?`     | ( hay needle -- ? )                 |
+| `$starts?`       | ( $ prefix -- ? )                   |
+| `$ends?`         | ( $ suffix -- ? )                   |
 
 ## Examples
 
 ```forth
 \ Build a greeting.
-S$" Hello, "  S$" world!"  $cat  $.
+S$" Hello, "  S$" world!"  $+  $.
 \ -> Hello, world!
 
 \ Conditional prefix.
 : greet ( name$ -- )
-    S$" Hi, " swap $cat S$" !" $cat $. cr
+    S$" Hi, " swap $+ S$" !" $+ $. cr
 ;
 S$" Alice" greet
 \ -> Hi, Alice!
 
-\ User-provided test.
+\ User-provided test.  There's no $=, so compare with $cmp 0=.
 : shouting? ( $ -- ? )
-    dup $upper $=
+    dup $upper $cmp 0=
 ;
 S$" QUIET"   shouting? .       \ -> -1
 S$" not so"  shouting? .       \ -> 0
 
 \ Conversion both ways.
-S$" data"  $>  type           \ raw type from managed
+S$" data"  $>addr  type        \ raw c-addr u from managed
 \ -> data
-s" raw"  >$  $.               \ managed from raw
+s" raw"  >$  $.                \ managed from raw
 \ -> raw
 ```
 

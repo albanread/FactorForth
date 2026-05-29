@@ -69,19 +69,20 @@ flowchart LR
 ;
 ```
 
-Compare the bare-Forth version:
+The squared sum is easy in bare Forth — but the square root isn't:
+`sqrt` exists only as a **LET function**, not as a standalone Forth
+word, so LET is what makes the one-liner above possible.
 
 ```forth
-: hypot ( a b -- c )
+: sum-of-squares ( a b -- a^2+b^2 )
     dup *           \ b^2
     swap dup *      \ a^2 b^2
     +               \ a^2+b^2
-    fsqrt           \ sqrt(...)
 ;
 ```
 
-Both work.  The LET version reads like the formula you'd write
-on paper.
+The LET version reads like the formula you'd write on paper — and
+gets you the `sqrt` for free.
 
 ## Operators
 

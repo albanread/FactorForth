@@ -129,7 +129,8 @@ nothing.  Fix:
 > : ok ( ? -- n ) if 1 else 0 then ;
 ```
 
-Or accept the asymmetry explicitly with `?dup`:
+Or keep both branches balanced by carrying a value through — here
+each path leaves exactly one number:
 
 ```
 > : pos-or-zero ( n -- n ) dup 0< if drop 0 then ;

@@ -20,11 +20,15 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
 - [Classes and methods](classes.md) — CLASS:, SLOT:, GENERIC:,
   METHOD:, polymorphic slots, two setter idioms
 - [CoreProtocols](coreprotocols.md) — the CLOS object model and the
-  standard library design, with diagrams
-- [Collections](collections.md) — the collection protocol reference:
-  grid, darray, dict, set, and the each/map/filter/fold algorithms
-- [Numerics](numerics.md) — vec2 and complex, a shared arithmetic
-  protocol written in LET
+  standard library design, with the layer map and diagrams
+- [Core protocol](core.md) — Layer 0: `show`, `equals?`, `clone` —
+  the root protocol every class opts into
+- [Collections](collections.md) — Layer 1: the collection protocol
+  (grid, darray, dict, set) and the each/map/filter/fold algorithms
+- [Numerics](numerics.md) — Layer 2: vec2 and complex, a shared
+  arithmetic protocol written in LET
+- [Text & streams](streams.md) — Layer 3: the `string` value type
+  and the stream protocol (eof-as-object), plus split/join/read-line
 - [LET algebra](let-algebra.md) — the infix DSL for math-heavy
   code
 - [Managed strings](managed-strings.md) — the `$-suffix` vocab

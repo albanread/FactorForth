@@ -1,5 +1,58 @@
 # Release notes
 
+## Unreleased (since v0.1.0)
+
+**CoreProtocols** — the standard class library — landed Layers 0–3,
+written in ordinary ANS Forth on the object system and shipped as
+loadable source under `lib/`. Each layer has a reference page in
+`docs/`; see [CoreProtocols](coreprotocols.md) for the design and layer
+map.
+
+- **Layer 0 · core protocol** (`lib/core.f`) — `show` / `show-ln`,
+  `equals?`, and `clone`, each a generic with a total `object`
+  catch-all (pretty-print, structural equality, shallow copy). The root
+  protocol every later class opts into. → [Core protocol](core.md)
+- **Layer 1 · collections** (`lib/collections.f`) — the collection
+  protocol (`size` / `at` / `at!` / `new-like`) over `grid`, `darray`,
+  `dict`, and `set`, plus the algorithms written once against it:
+  `each` / `map` / `filter` / `fold` / `tally` / `any?` / `all?` /
+  `find` / `sum` / `product`, and the `equals?`-based `member?` /
+  `index-of`. → [Collections](collections.md)
+- **Layer 2 · numerics** (`lib/numerics.f`) — a shared arithmetic
+  protocol (`v+` / `v-` / `vscale` / `vmag`) over `vec2` and `complex`,
+  with `v+` / `v-` keying on **both** arguments (multiple dispatch).
+  Method bodies are written in LET; derived `vneg` / `vdist` / `vlerp`
+  / `vmid` work for every protocol type. → [Numerics](numerics.md)
+- **Layer 3 · text & streams** (`lib/streams.f`) — a `string` value
+  type (which joins the collection + core protocols) and the STREAM
+  protocol (`read-char` / `write-char`) whose signature idea is that
+  end-of-file is an **object** (`<eof>`), not a flag. Readers/writers,
+  `split` / `join` / `read-line`, and the protocol-derived
+  `copy-stream` / `read-all`. → [Text & streams](streams.md)
+
+Layers 4 (Files) and 5 (GUI & events) are designed but **not yet
+shipped**; graphics is currently reached through the `gpane-*` FFI
+primitives, not a CLOS event protocol.
+
+New syntax: **character literals** — `'a'` (97), `','` (44), `' '`
+(32), plus the backslash escapes `'\n'` / `'\t'` / `'\r'` / `'\0'` /
+`'\s'` / `'\e'` / `'\\'` / `'\''` / `'\"'`. Each pushes a character's
+byte code; it's sugar for the integer, so it composes anywhere a number
+does — idiomatic for delimiters (`',' split`) and ASCII work. The
+closing quote distinguishes it from `'` the tick. See the
+[language reference](language-reference.md#literals).
+
+Object system: every class now exposes a membership predicate
+`classname?` ( x -- ? ), backed by Factor's auto-generated tuple
+predicate (respects inheritance). The class docs are also corrected —
+accessors for inherited slots (`colored-point>x`) and full
+multi-method dispatch both ship; earlier "Sprint 1" caveats denying
+them were stale. See [Classes and methods](classes.md).
+
+Compiler fix: small integer powers in LET (`x^2`, `x^3`, …) now compile
+as repeated multiplication rather than float `^`, so squaring a
+negative value no longer drifts into the complex plane (#80).
+
 ## v0.1.0 — 2026-05-25
 
 First public release of Factor4th.
@@ -89,9 +142,10 @@ This means:
 - **`.` on empty stack crashes the IDE.**  See above under
   Known limitations.  This is the one rough edge in an
   otherwise persistent REPL.
-- **Some Core stragglers**: `U<` `U>` `COUNT` `KEY?` `EXIT`
-  `.S` `MOVE` `PICK` `ROLL` not yet shipped (use
-  `language-reference.md`'s alternatives).
+- **Some Core stragglers**: `U<` `U>` `COUNT` `KEY?` `MOVE`
+  `PICK` `ROLL` `.R` `2R@` `:NONAME` not yet shipped (use
+  `language-reference.md`'s alternatives). (`EXIT` and `.S` were
+  listed here at v0.1.0 but have since shipped.)
 - **`?DUP`** has a polymorphic effect that Factor's inference
   rejects; needs an emit-time rewrite (tracked).
 - **`DEFER` / `IS`** not shipped — use `' name VARIABLE+EXECUTE`

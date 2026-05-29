@@ -8,12 +8,55 @@ introduction to the basics.
 Words marked **`new`** are Factor4th extensions not present
 in stock ANS Forth.
 
+## Literals
+
+| form              | example                       | value                                |
+|-------------------|-------------------------------|--------------------------------------|
+| decimal           | `42`  `-7`                    | base-10 integer                      |
+| hex               | `$ff`  `0xCAFE`               | base-16 integer                      |
+| binary            | `%1010`                       | base-2 integer (= 10)                |
+| explicit decimal  | `#42`                         | base-10 regardless of `BASE`         |
+| float             | `1.5`  `2.5e`  `3e0`  `-1.25` | IEEE double                          |
+| character **`new`** | `'a'`  `','`  `' '`         | the character's byte code (`'a'` = 97) |
+
+### Character literals **`new`**
+
+`'<c>'` pushes a single character's byte code as an integer — `'a'`
+is `97`, `' '` is `32`, `','` is `44`. It is exactly sugar for the
+number, so it composes anywhere an integer does:
+
+```forth
+'A' emit                 \ prints A
+S" a,b,c" >string ',' split    \ split on a comma (see streams)
+'0' CONSTANT zero-digit
+```
+
+Backslash escapes reach the characters you can't comfortably type
+between two quotes:
+
+| literal | code | character        |
+|---------|------|------------------|
+| `'\n'`  | 10   | newline          |
+| `'\t'`  | 9    | tab              |
+| `'\r'`  | 13   | carriage return  |
+| `'\0'`  | 0    | NUL              |
+| `'\s'`  | 32   | space            |
+| `'\e'`  | 27   | ESC              |
+| `'\\'`  | 92   | backslash        |
+| `'\''`  | 39   | single quote     |
+| `'\"'`  | 34   | double quote     |
+
+The closing quote is what distinguishes a character literal from `'`
+the **tick** (get-execution-token): `' foo` is tick + `foo`, while
+`'f'` is the code for `f`. An unrecognised escape such as `'\x'` is
+left as an ordinary word, so it surfaces as an unknown-word error
+rather than a surprising value.
+
 ## Stack manipulation
 
 | word    | effect                  |
 |---------|-------------------------|
 | dup     | ( a -- a a )            |
-| ?dup    | ( a -- a a \| 0 -- 0 )  |
 | drop    | ( a -- )                |
 | swap    | ( a b -- b a )          |
 | over    | ( a b -- a b a )        |
@@ -25,10 +68,9 @@ in stock ANS Forth.
 | 2drop   | ( a b -- )              |
 | 2swap   | ( a b c d -- c d a b )  |
 | 2over   | ( a b c d -- a b c d a b ) |
-| pick    | ( ... n -- ... n-th )   |
 | depth   | ( -- n )                |
 
-Return-stack: `>r  r>  r@  2>r  2r>  2r@  rdrop`.
+Return-stack: `>r  r>  r@  2>r  2r>  rdrop`.
 
 ## Arithmetic
 
@@ -47,7 +89,10 @@ Return-stack: `>r  r>  r@  2>r  2r>  2r@  rdrop`.
 | 2* 2/   | ( n -- n*2 / n/2 )      |
 | lshift rshift | ( x n -- x<<n / x>>n ) |
 
-Floats: `f+ f- f* f/  f.  fnegate  fabs  fsqrt  fsin  fcos  ftan  fln  fexp  fmin  fmax`.
+Floats: arithmetic `f+ f- f* f/`, comparison `f< f> f=` (ANS `-1`/`0`
+flags), memory `f@ f!`.  Transcendental functions (`sqrt`, `sin`,
+`cos`, `tan`, `ln`, `exp`) are available **inside LET expressions**
+(see [LET algebra](let-algebra.md)), not as standalone Forth words.
 
 ## Comparisons
 
@@ -68,8 +113,6 @@ Return ANS Forth flags: `-1` for true, `0` for false.
 | or   | ( a b -- a\|b )    |
 | xor  | ( a b -- a^b )     |
 | invert | ( a -- ~a )      |
-| true | ( -- -1 )          |
-| false| ( -- 0 )           |
 
 ## Control flow
 
@@ -90,7 +133,6 @@ exit                         \ return from word
 
 ```
 :    name body ;             \ colon definition
-:noname body ; ( -- xt )     \ anonymous quotation
 constant name                \ ( n "name" -- )
 variable name                \ create a one-cell variable
 create name [allot bytes]    \ define a named data buffer
@@ -126,7 +168,6 @@ Cells are 8 bytes (64-bit).
 |---------|---------------------------------|
 | .       | ( n -- ; print decimal )        |
 | u.      | ( u -- ; unsigned )             |
-| .r      | ( n w -- ; right-justified )    |
 | emit    | ( c -- ; print char )           |
 | type    | ( c-addr u -- ; print string )  |
 | ." ... " | ( -- ; print inline )          |
@@ -140,22 +181,26 @@ Pictured number output: `<#  #  #s  sign  hold  #>`.
 
 ## Strings (Factor4th extension - $-suffix vocab) `new`
 
-| word    | effect                          |
-|---------|---------------------------------|
-| S$" ..."| ( -- $ ; managed string literal )|
-| $.      | ( $ -- ; print )                |
-| $cat    | ( $ $ -- $ ; concatenate )      |
-| $len    | ( $ -- n )                      |
-| $=      | ( $ $ -- ? )                    |
-| $cmp    | ( $ $ -- n ; <0,0,>0 )          |
-| $substr | ( $ start len -- $ )            |
-| $upper  | ( $ -- $ ; uppercase copy )     |
-| $lower  | ( $ -- $ ; lowercase copy )     |
-| $trim   | ( $ -- $ ; strip whitespace )   |
-| >$      | ( c-addr u -- $ ; from raw )    |
-| $>      | ( $ -- c-addr u ; to raw )      |
+| word        | effect                            |
+|-------------|-----------------------------------|
+| S$" ..."    | ( -- $ ; managed string literal )  |
+| >$          | ( c-addr u -- $ ; from raw )       |
+| $>addr      | ( $ -- c-addr u ; to raw )         |
+| int>$       | ( n -- $ ; number to string )      |
+| $>int       | ( $ -- n ; parse to int )          |
+| $len        | ( $ -- n ; length )                |
+| $.          | ( $ -- ; print )                   |
+| $+          | ( $a $b -- $ ; concatenate )       |
+| $slice      | ( $ start len -- $ ; substring )   |
+| $upper      | ( $ -- $ ; uppercase copy )        |
+| $lower      | ( $ -- $ ; lowercase copy )        |
+| $cmp        | ( $a $b -- n ; <0 / 0 / >0 — `$cmp 0=` for equality ) |
+| $find       | ( hay needle -- index )            |
+| $contains?  | ( hay needle -- ? )                |
+| $starts?    | ( $ prefix -- ? )                  |
+| $ends?      | ( $ suffix -- ? )                  |
 
-See [managed-strings.md](managed-strings.md) for details.
+See [managed-strings.md](managed-strings.md) for the full vocab.
 
 ## LET algebra (Factor4th extension) `new`
 
@@ -196,6 +241,25 @@ same compilation unit, so code after the `NEEDS` can use them directly.
 - `\` and `( ... )` comments.
 - `cells chars allot here` for raw memory work.
 - `' name execute` for vectored dispatch (XTs as first-class).
+
+## Not yet implemented
+
+These standard ANS words aren't shipped yet — use the alternative:
+
+| word            | use instead                                       |
+|-----------------|---------------------------------------------------|
+| `?DUP`          | `dup` then a plain `IF` (`dup IF … THEN`)          |
+| `PICK` `ROLL`   | a `VALUE` or the return stack to stash items      |
+| `.R`            | the pictured-number words (`<# … #>`)             |
+| `2R@`           | `2R> 2DUP 2>R`                                     |
+| `TRUE` `FALSE`  | the literals `-1` and `0`                         |
+| `U<` `U>`       | signed `<` / `>` (no unsigned compare yet)        |
+| `COUNT` `MOVE` `KEY?` | — (not yet available)                       |
+| `:NONAME`       | a named `:` definition + `'` to get its xt        |
+
+Float transcendentals (`FSQRT`, `FSIN`, …) are **not** Forth words;
+the functions `sqrt` / `sin` / `cos` / `tan` / `ln` / `exp` are
+available inside `LET` expressions instead.
 
 ## Differences from stock ANS
 

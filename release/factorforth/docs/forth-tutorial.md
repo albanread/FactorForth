@@ -139,7 +139,7 @@ Or `begin`...`while`...`repeat`:
 
 ```
 > : countup ( n -- )
-    1 begin dup 2 pick <= while
+    1 begin 2dup >= while
         dup .
         1 +
     repeat
@@ -173,7 +173,6 @@ Integers are 64-bit signed.  Print with:
 
 - `.`   — decimal, with trailing space
 - `u.`  — unsigned decimal
-- `.r`  — right-justified in a width
 - `hex` — switch base to 16
 - `decimal` — back to base 10
 - `cr`  — newline
@@ -181,7 +180,6 @@ Integers are 64-bit signed.  Print with:
 ```
 > 255 hex . decimal .
 ff 255
-> -7 .r cr     ( prints "-7" right-justified )
 ```
 
 ## 8. Strings

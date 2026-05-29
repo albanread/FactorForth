@@ -120,12 +120,12 @@ flow downward only.
 
 ```mermaid
 flowchart TB
-    L5["Layer 5 · GUI & events — canvas · event hierarchy · app loop"]
-    L4["Layer 4 · Files — path · file · file-stream"]
-    L3["Layer 3 · Text & streams — string · STREAM protocol"]
-    L2["Layer 2 · Numerics — vec2 · complex"]
-    L1["Layer 1 · Collections — vector · grid · dict · set"]
-    L0["Layer 0 · Core protocol — initialize · show · equals? · clone"]
+    L5["Layer 5 · GUI & events — planned"]
+    L4["Layer 4 · Files — planned"]
+    L3["Layer 3 · Text & streams — string · STREAM protocol — SHIPPED"]
+    L2["Layer 2 · Numerics — vec2 · complex — SHIPPED"]
+    L1["Layer 1 · Collections — grid · darray · dict · set — SHIPPED"]
+    L0["Layer 0 · Core protocol — show · equals? · clone — SHIPPED"]
 
     L5 --> L3
     L5 --> L2
@@ -137,11 +137,18 @@ flowchart TB
     L1 --> L0
 ```
 
-> **Status:** the object system (the foundation above) ships today.
-> The CoreProtocols layers are a staged build — each phase ends in a
-> runnable toy (text Othello, markdown→HTML, a Mandelbrot viewer).
+> **Status (2026-05-29).** The object system (the foundation above) and
+> CoreProtocols **Layers 0–3** ship today, each with a reference page:
+> [Core protocol](core.md) · [Collections](collections.md) ·
+> [Numerics](numerics.md) · [Text & streams](streams.md). Layers 4
+> (Files) and 5 (GUI & events) are **planned, not yet shipped** — the
+> sketches below are roadmap, not API. (Graphics today is reached
+> through the `gpane-*` FFI primitives, not a CLOS event protocol; see
+> the `gfx-*` demos.)
 
 ### Streams: end-of-file is an object, not a flag
+
+*(Layer 3 — shipped. Full reference: [Text & streams](streams.md).)*
 
 A stream returns *one* value — a character, or the singleton
 `<eof>` marker. You replace the `IF`/`WHILE` end check with
@@ -156,12 +163,31 @@ stateDiagram-v2
     Done --> [*]
 ```
 
-### Events: the centrepiece (double dispatch)
+---
 
-The GUI event loop wraps each raw event into an **event object**, then
-calls `handle ( app event -- )` — dispatching on the *pair*
-`(your-app-class × event-class)`. Your app subclasses `app` and writes
-the `handle` methods it cares about; the rest inherit a no-op.
+## Planned layers (not yet shipped)
+
+The two layers below are **design, not API** — nothing here ships yet.
+They're recorded so the staged build has a target to grow into.
+
+### Files (Layer 4)
+
+A `path` / `file` / `file-stream` trio that joins the Layer 3 STREAM
+protocol: a `file-stream` would answer `read-char` / `write-char`, so
+`copy-stream`, `read-line`, and friends work over files unchanged. The
+point of building streams first: files become *just another stream*.
+
+### Events (Layer 5): double dispatch on (app × event)
+
+> **Not shipped.** Today, graphics is reached through the `gpane-*` FFI
+> primitives (see the `gfx-shapes` / `gfx-mandelbrot` demos), and the
+> Othello capstone renders as text. The CLOS event protocol sketched
+> here is the planned successor, not current API.
+
+The planned GUI event loop wraps each raw event into an **event
+object**, then calls `handle ( app event -- )` — dispatching on the
+*pair* `(your-app-class × event-class)`. Your app subclasses `app` and
+writes the `handle` methods it cares about; the rest inherit a no-op.
 
 ```mermaid
 sequenceDiagram

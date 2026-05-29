@@ -26,6 +26,7 @@ For `CLASS: point SLOT: x SLOT: y ;` the compiler generates:
 | Word            | Stack effect       | What it does                                       |
 |-----------------|--------------------|----------------------------------------------------|
 | `<point>`       | `( x y -- p )`     | Constructor — builds a point with the given slots  |
+| `point?`        | `( x -- ? )`       | Predicate — true if `x` is a point (or a subclass) |
 | `point>x`       | `( p -- x )`       | Getter for the `x` slot                            |
 | `point>y`       | `( p -- y )`       | Getter for the `y` slot                            |
 | `x>>point`      | `( p v -- p )`     | Chainable setter — writes `v` to `x`, returns `p`  |
@@ -36,6 +37,9 @@ For `CLASS: point SLOT: x SLOT: y ;` the compiler generates:
 The class name itself (`point`) is also reserved so `METHOD:`
 declarations can dispatch on it.
 
+A class predicate `classname?` comes with each class too — see
+[Class predicates](#class-predicates) below.
+
 One `CLASS:` line desugars into a Factor `TUPLE:` plus the full
 family of words — you write the declaration, the compiler writes
 the boilerplate:
@@ -44,6 +48,7 @@ the boilerplate:
 flowchart LR
     C["CLASS: point SLOT: x SLOT: y ;"] --> T["a Factor TUPLE: with slots x, y"]
     C --> Ctor["constructor — one, takes all slots"]
+    C --> Pred["predicate — point?"]
     C --> Get["getters — one per slot"]
     C --> SetC["chainable setters — one per slot"]
     C --> SetA["ANS stores — one per slot"]
@@ -135,6 +140,47 @@ difference is purely stack discipline.
 The compiler inlines both — they're zero-cost abstractions over
 the underlying Factor accessor.
 
+## Class predicates
+
+Every class also gets a **predicate** `classname?` with stack effect
+`( x -- ? )` — true when `x` is an instance of that class. It's the
+class-aware complement to `TYPEOF` (which only distinguishes "tuple vs
+primitive"): use it to branch on, or guard, a value whose class you
+don't know statically.
+
+```forth
+CLASS: point  SLOT: x SLOT: y ;
+CLASS: circle SLOT: cx SLOT: cy SLOT: r ;
+
+3 4 <point>  point?  .         \ -1   (it is a point)
+3 4 <point>  circle? .         \ 0    (it is not a circle)
+42           point?  .         \ 0    (a plain int is not a point)
+```
+
+Predicates respect inheritance: a subclass instance answers `true` to
+its parent's predicate, because it *is-a* parent.
+
+```forth
+CLASS: colored-point EXTENDS point  SLOT: rgb ;
+3 4 255 <colored-point>  dup point?        . \ -1  (a colored-point is-a point)
+                             colored-point? . \ -1  (and is-a colored-point)
+```
+
+A common use is refining a value whose class you don't know — a
+polymorphic slot, or something handed back by `find` / `dict-at` —
+before you act on it:
+
+```forth
+: describe ( x -- )
+    dup point?  if  drop ." a point"
+    else dup circle? if  drop ." a circle"
+    else drop ." something else"
+    then then ;
+```
+
+Under the hood `classname?` is the predicate Factor's `TUPLE:` already
+generates — we just expose the name, so it costs nothing.
+
 ## Inheritance
 
 ```forth
@@ -166,17 +212,20 @@ Parent slots come first in the constructor, child slots last:
 3 4 255 <colored-point>   \ x=3, y=4, rgb=255
 ```
 
-Sprint 1 caveat: parent-class accessors don't currently
-auto-generate on the child.  Use the parent's accessors to
-reach inherited slots:
+A child gets auto-generated accessors for **every** slot it has,
+inherited ones included — so an inherited slot is reachable through
+either the parent's accessor or the child's own namespaced one:
 
 ```forth
 3 4 255 <colored-point>
-dup point>x .             \ 3 — parent's getter works on child instances
-colored-point>rgb .       \ 255 — child's own slot
+dup point>x .             \ 3   — the parent's getter
+dup colored-point>x .     \ 3   — the child's own getter for the same slot
+colored-point>rgb .       \ 255 — the child's own slot
 ```
 
-Cross-class slot-name flattening is on the sprint-2 list.
+Both compile to the same Factor `x>>` accessor under the hood (slot
+accessors are keyed on the slot name, so they work on any tuple that
+has that slot), so pick whichever reads better.
 
 ## Generic functions and methods
 
@@ -195,7 +244,7 @@ METHOD: area ( p:point -- a )
     drop 0.0e ;
 
 METHOD: area ( c:circle -- a )
-    circle>r dup * pi f* ;
+    circle>r dup * 3.14159e f* ;
 ```
 
 Then `area` dispatches based on what's on top:
@@ -219,8 +268,9 @@ METHOD: area ( c:circle -- a )
 
 Reads: "the input `c` is dispatched on, and must be a
 circle."  Non-dispatching inputs are bare names like in a
-regular `:` definition's annotation.  Sprint 1 only supports
-dispatching on the first input.
+regular `:` definition's annotation.  Any input position may be
+specialised — `( a:line b:circle -- p )` dispatches on both — see
+[Multi-method dispatch](#multi-method-dispatch) below.
 
 ### Generic must declare its effect
 
@@ -365,8 +415,9 @@ dispatch calls is decided at generic-emit time.
 
 - Class declaration with arbitrary slots
 - Auto-generated constructor, two setter forms, getter per slot
-- Single inheritance via `EXTENDS` with parent-class accessors
-  on children
+- Per-class membership predicate (`classname?`)
+- Single inheritance via `EXTENDS`, with accessors for inherited
+  slots auto-generated on the child (`colored-point>x` works)
 - Cross-eval class persistence (define in one eval, use in the
   next via the F7 checker AND the REPL)
 - Generic functions with required stack-effect annotation
@@ -413,8 +464,9 @@ them — no synthesised dispatch:
 - Slot initial values (`{ slot initial: v }` is native to
   Factor TUPLE:)
 - Typed slots (`{ slot integer }` is native)
-- `CLASS-OF` / class-membership predicates (Factor's `class-of`
-  is one word)
+- `CLASS-OF ( obj -- class )` for finer inspection — the membership
+  predicate `classname?` already ships; this would *name* the class
+  (Factor's `class-of` is one word)
 - Cross-eval aux methods (define `METHOD-BEFORE:` in a later
   eval than the `GENERIC:` — needs persistent shadow-generic
   state in the compile context)
