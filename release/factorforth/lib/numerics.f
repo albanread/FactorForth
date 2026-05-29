@@ -127,15 +127,25 @@ METHOD: show ( z:complex -- )
 \ Written ONCE, over the generics above — so they work for EVERY type
 \ that implements the protocol: vec2, complex, and whatever you add
 \ tomorrow.  This is the point of a protocol: the algorithm names the
-\ behaviour (vscale, vmag, …), never the concrete class.
-\
-\ NB: words derived over SINGLE-dispatch generics (vscale, vmag) work
-\ here.  Words derived over the MULTI-class generics (v+, v-) — vdist,
-\ vlerp, vmid — are held back pending a dispatch-finalization fix: a
-\ true 2-class multi-method called from inside a compiled colon word
-\ currently misses its method (see the known-issues task).  Call v+/v-
-\ directly for now; the derived forms land once that's fixed.
+\ behaviour (v+, v-, vscale, vmag), never the concrete class, so a new
+\ type joins the family the moment it answers those words.
 
 \ vneg — the additive inverse, v scaled by -1.
 : vneg ( v -- c )
     -1e vscale ;
+
+\ vdist — the distance between two values: the magnitude of a - b.
+: vdist ( a b -- n )
+    v- vmag ;
+
+\ vlerp — linear interpolation a -> b by t:  a + (b - a)*t.
+\   >r          ( a b )        save t
+\   over v-     ( a b-a )      b - a, keeping a
+\   r> vscale   ( a (b-a)*t )  scale by t
+\   v+          ( a+(b-a)*t )  add the base back
+: vlerp ( a b t -- c )
+    >r over v- r> vscale v+ ;
+
+\ vmid — the midpoint, lerp at t = 0.5.
+: vmid ( a b -- c )
+    0.5e vlerp ;

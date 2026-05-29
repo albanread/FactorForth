@@ -33,6 +33,40 @@ fn run(s: &Session, ctx: &mut CompileContext, src: &str) {
     s.eval(&ir).expect("eval");
 }
 
+/// Regression for #80 — the real root cause: a LET `x^2` must square by
+/// multiplication, NOT float exponentiation.
+///
+/// `math.functions:^` with a FLOAT exponent computes `exp(y*log x)`, and
+/// `log` of a negative number is complex — so `(-3.0) 2.0 ^` returns a
+/// COMPLEX number, not `9.0`.  Magnitude / distance code squares negative
+/// differences all the time (`vmag = sqrt(x^2+y^2)`, `vdist = |a-b|`), so
+/// before the fix those silently went complex and then surfaced as a
+/// bogus "no method" downstream.  The codegen now emits `x dup *` for
+/// small integer powers, which is correct for any sign (and faster).
+///
+/// This test would have FAILED before the fix: the vmag of a vector with
+/// negative components must be the real magnitude.
+#[test]
+#[ignore]
+fn negative_components_square_to_real_magnitude() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, NUMERICS);
+    run(&s, &mut ctx, r#"
+        \ |(-3,-4)| = 5.0 (real).  Pre-fix this was complex -> "no method".
+        ." negmag=" -3.0e -4.0e <vec2> vmag .          \ 5.0
+        \ Distance squares the negative difference (1,2)-(4,6) = (-3,-4).
+        ." dist=" 1.0e 2.0e <vec2> 4.0e 6.0e <vec2> vdist .   \ 5.0
+        \ Same for complex modulus.
+        ." cmod=" -3.0e -4.0e <complex> vmag .          \ 5.0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("negmag=5."), "negative vec2 magnitude must be real 5.0: {cap}");
+    assert!(cap.contains("dist=5."), "vdist over negative difference: {cap}");
+    assert!(cap.contains("cmod=5."), "negative complex modulus must be real 5.0: {cap}");
+}
+
 /// vec2 addition — the keystone case: a multi-OUTPUT LET (`-> ( sx sy )`)
 /// inside a multi-DISPATCH method (`a:vec2 b:vec2`), result rebuilt with
 /// the boa constructor.  If this works, the rest follows.
@@ -209,14 +243,25 @@ fn derived_protocol_polymorphic() {
         3.0e 4.0e <vec2> vneg VALUE n
         ." vnx=" n vec2>x .                          \ -3.0
         ." vny=" n vec2>y .                          \ -4.0
+        ." vdist=" 1.0e 2.0e <vec2> 4.0e 6.0e <vec2> vdist .   \ |(-3,-4)| = 5.0
+        0.0e 0.0e <vec2> 10.0e 20.0e <vec2> 0.5e vlerp VALUE m
+        ." vlx=" m vec2>x .                          \ 5.0
+        ." vly=" m vec2>y .                          \ 10.0
 
-        \ the SAME vneg on a complex -> (-1,-2)
+        \ the SAME words on complex — one definition, every protocol type
         1.0e 2.0e <complex> vneg VALUE c
         ." cnr=" c complex>re .                      \ -1.0
-        ." cni=" c complex>im .                      \ -2.0
+        ." cdist=" 1.0e 2.0e <complex> 4.0e 6.0e <complex> vdist .  \ 5.0
+        0.0e 0.0e <complex> 10.0e 20.0e <complex> vmid VALUE cm
+        ." cmr=" cm complex>re .                     \ 5.0
+        ." cmi=" cm complex>im .                     \ 10.0
     "#);
     let cap = captured(&out);
     eprintln!("captured: {cap:?}");
     assert!(cap.contains("vnx=-3.") && cap.contains("vny=-4."), "vneg vec2: {cap}");
-    assert!(cap.contains("cnr=-1.") && cap.contains("cni=-2."), "vneg complex (same word): {cap}");
+    assert!(cap.contains("vdist=5."), "vdist vec2: {cap}");
+    assert!(cap.contains("vlx=5.") && cap.contains("vly=10."), "vlerp vec2: {cap}");
+    assert!(cap.contains("cnr=-1."), "vneg complex: {cap}");
+    assert!(cap.contains("cdist=5."), "vdist complex (same word): {cap}");
+    assert!(cap.contains("cmr=5.") && cap.contains("cmi=10."), "vmid complex: {cap}");
 }

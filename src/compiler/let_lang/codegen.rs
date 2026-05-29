@@ -162,6 +162,31 @@ fn emit_expr(e: &Expr, out: &mut String) {
             out.push_str(" math:neg");
         }
         Expr::Bin(op, l, r) => {
+            // Small integer powers (x^2, x^3, …) compile to repeated
+            // multiplication rather than `math.functions:^`.  This is
+            // faster (no libm `fpow`, no generic dispatch) and, crucially,
+            // avoids #80: Factor's `^` is itself a generic, and a
+            // multi-method body that calls it mis-dispatches ("no method")
+            // when reached through a compiled colon word across an eval
+            // boundary.  Squaring-by-multiply keeps protocol-derived words
+            // (vdist = v- vmag, etc.) working.  x^1 = x; x^0 and
+            // non-integer / large / negative exponents fall back to `^`.
+            if let BinOp::Pow = op {
+                if let Expr::Lit(n) = r.as_ref() {
+                    let n = *n;
+                    if n.fract() == 0.0 && (1.0..=8.0).contains(&n) {
+                        let k = n as u32;
+                        emit_expr(l, out);
+                        for _ in 1..k {
+                            out.push_str(" dup");
+                        }
+                        for _ in 1..k {
+                            out.push_str(" math:*");
+                        }
+                        return;
+                    }
+                }
+            }
             emit_expr(l, out);
             out.push(' ');
             emit_expr(r, out);
