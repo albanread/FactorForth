@@ -22,7 +22,9 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
 - [CoreProtocols](coreprotocols.md) — the CLOS object model and the
   standard library design, with diagrams
 - [Collections](collections.md) — the collection protocol reference:
-  grid, darray, and the each/map/filter/fold algorithms
+  grid, darray, dict, set, and the each/map/filter/fold algorithms
+- [Numerics](numerics.md) — vec2 and complex, a shared arithmetic
+  protocol written in LET
 - [LET algebra](let-algebra.md) — the infix DSL for math-heavy
   code
 - [Managed strings](managed-strings.md) — the `$-suffix` vocab
