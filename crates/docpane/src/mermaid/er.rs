@@ -563,7 +563,7 @@ fn intersect_rect(rx: f64, ry: f64, w: f64, h: f64, px: f64, py: f64) -> (f64, f
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &ErGraph,
     ox: f32,
@@ -587,7 +587,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_entity(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     entity: &ErEntityBox,
     tx: &impl Fn(f32) -> f32,
     ty: &impl Fn(f32) -> f32,
@@ -762,7 +762,7 @@ unsafe fn draw_entity(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_edge(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     edge: &ErEdge,
     scale: f32,
@@ -844,7 +844,7 @@ unsafe fn draw_edge(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_cardinality_marker(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     from: (f32, f32),
     to: (f32, f32),
     card: ErCardinality,
@@ -863,7 +863,7 @@ unsafe fn draw_cardinality_marker(
     let s = (10.0 * scale).max(8.0);
 
     let point_at = |d: f32| (to.0 - ux * d, to.1 - uy * d);
-    let draw_bar = |target: &ID2D1HwndRenderTarget, center: (f32, f32)| {
+    let draw_bar = |target: &ID2D1RenderTarget, center: (f32, f32)| {
         target.DrawLine(
             Vector2 {
                 X: center.0 + px * s * 0.55,
@@ -878,7 +878,7 @@ unsafe fn draw_cardinality_marker(
             None::<&ID2D1StrokeStyle>,
         );
     };
-    let draw_crow = |target: &ID2D1HwndRenderTarget| {
+    let draw_crow = |target: &ID2D1RenderTarget| {
         let tip = point_at(s * 0.45);
         let back = point_at(s * 1.8);
         let left = (back.0 + px * s * 0.85, back.1 + py * s * 0.85);
@@ -916,7 +916,7 @@ unsafe fn draw_cardinality_marker(
 }
 
 unsafe fn draw_marker_circle(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     center: (f32, f32),
     radius: f32,
     line_w: f32,
@@ -973,7 +973,7 @@ fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 unsafe fn draw_center_label(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     cx: f32,
     cy: f32,
@@ -1006,7 +1006,7 @@ unsafe fn draw_center_label(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

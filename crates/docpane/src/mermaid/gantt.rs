@@ -266,7 +266,7 @@ fn axis_font(scale: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &GanttGraph,
     ox: f32,
@@ -318,7 +318,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_grid(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     graph: &GanttGraph,
     scale: f32,
     tx: &impl Fn(f32) -> f32,
@@ -396,7 +396,7 @@ unsafe fn draw_grid(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_section(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     section: &GanttSection,
     graph: &GanttGraph,
     scale: f32,
@@ -437,7 +437,7 @@ unsafe fn draw_section(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_task(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     task: &GanttTask,
     graph: &GanttGraph,
@@ -583,7 +583,7 @@ unsafe fn draw_task(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_milestone(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     task: &GanttTask,
     scale: f32,
@@ -614,7 +614,7 @@ unsafe fn draw_milestone(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

@@ -549,7 +549,7 @@ fn self_loop_points(element: &C4ElementBox) -> Vec<(f32, f32)> {
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &C4Graph,
     ox: f32,
@@ -606,7 +606,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_boundary(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     boundary: &C4BoundaryBox,
     scale: f32,
@@ -691,7 +691,7 @@ unsafe fn draw_boundary(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_element(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     element: &C4ElementBox,
     scale: f32,
@@ -827,7 +827,7 @@ unsafe fn draw_element(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_element_shape(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     shape: C4Shape,
     x: f32,
@@ -909,7 +909,7 @@ unsafe fn draw_element_shape(
 }
 
 unsafe fn draw_person_icon(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     x: f32,
     y: f32,
     w: f32,
@@ -962,7 +962,7 @@ unsafe fn draw_person_icon(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_edge_line(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     edge: &C4Edge,
     scale: f32,
@@ -1008,7 +1008,7 @@ unsafe fn draw_edge_line(
 }
 
 unsafe fn draw_arrow(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     from: (f32, f32),
     to: (f32, f32),
@@ -1036,7 +1036,7 @@ unsafe fn draw_arrow(
 }
 
 unsafe fn draw_edge_label(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     edge: &C4Edge,
     scale: f32,
     tx: &impl Fn(f32) -> f32,
@@ -1062,7 +1062,7 @@ unsafe fn draw_edge_label(
 }
 
 unsafe fn draw_edge_label_at(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     edge: &C4Edge,
     cx: f32,
     cy: f32,
@@ -1180,7 +1180,7 @@ fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

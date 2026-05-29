@@ -309,7 +309,7 @@ fn wrap_count(text: &str, chars_per_line: usize) -> usize {
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &JourneyGraph,
     ox: f32,
@@ -364,7 +364,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_section(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     section: &JourneySectionBox,
     tx: &impl Fn(f32) -> f32,
     ty: &impl Fn(f32) -> f32,
@@ -409,7 +409,7 @@ unsafe fn draw_section(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_chart(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     graph: &JourneyGraph,
     lane: &JourneyLane,
     tx: &impl Fn(f32) -> f32,
@@ -494,7 +494,7 @@ unsafe fn draw_chart(
 }
 
 unsafe fn draw_connections(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     graph: &JourneyGraph,
     lane: &JourneyLane,
     scale: f32,
@@ -528,7 +528,7 @@ unsafe fn draw_connections(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_task(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     task: &JourneyTaskBox,
     scale: f32,
@@ -646,7 +646,7 @@ unsafe fn draw_task(
 }
 
 unsafe fn draw_score_dots(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     task: &JourneyTaskBox,
     rect: D2D_RECT_F,
     score_top: f32,
@@ -729,7 +729,7 @@ fn score_font(scale: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

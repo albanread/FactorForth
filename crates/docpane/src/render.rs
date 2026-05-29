@@ -48,6 +48,14 @@ pub fn init() -> Result<()> {
 fn d2d() -> &'static ID2D1Factory1 {
     G_D2D.get().expect("docpane::render::init() not called")
 }
+
+/// The shared Direct2D factory.  A host needs it to create its own
+/// render target — an `ID2D1HwndRenderTarget` for a live pane, or an
+/// `ID2D1RenderTarget` over a WIC bitmap for an offscreen snapshot.
+/// Call [`init`] first.
+pub fn factory() -> &'static ID2D1Factory1 {
+    d2d()
+}
 fn dw() -> &'static IDWriteFactory2 {
     G_DW.get().expect("docpane::render::init() not called")
 }
@@ -160,7 +168,7 @@ pub fn measure_text(text: &str, font: &str, size: f32, bold: bool, italic: bool)
     })
 }
 
-unsafe fn brush(t: &ID2D1HwndRenderTarget, hex: u32) -> Result<ID2D1SolidColorBrush> {
+unsafe fn brush(t: &ID2D1RenderTarget, hex: u32) -> Result<ID2D1SolidColorBrush> {
     let c = theme::hex(hex);
     t.CreateSolidColorBrush(std::ptr::addr_of!(c), None)
 }
@@ -176,7 +184,7 @@ unsafe fn brush(t: &ID2D1HwndRenderTarget, hex: u32) -> Result<ID2D1SolidColorBr
 /// The caller is responsible for `BeginDraw`/`Clear`/`EndDraw` around
 /// this; `draw_document` only issues content draw calls.
 pub unsafe fn draw_document(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     layout: &Layout,
     scroll_y: f32,
     viewport_h: f32,

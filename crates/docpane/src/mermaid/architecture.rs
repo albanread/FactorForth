@@ -551,7 +551,7 @@ fn edge_points(
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &ArchitectureGraph,
     ox: f32,
@@ -603,7 +603,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_group(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     group: &ArchitectureGroupBox,
     scale: f32,
     tx: &impl Fn(f32) -> f32,
@@ -663,7 +663,7 @@ unsafe fn draw_group(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_service(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     service: &ArchitectureServiceBox,
     scale: f32,
@@ -745,7 +745,7 @@ unsafe fn draw_service(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_icon(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     rect: D2D_RECT_F,
     icon: &str,
@@ -858,7 +858,7 @@ fn icon_label(icon: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_edge(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     edge: &ArchitectureEdgeLine,
     scale: f32,
@@ -907,7 +907,7 @@ unsafe fn draw_edge(
 }
 
 unsafe fn draw_arrow(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     from: (f32, f32),
     to: (f32, f32),
@@ -934,7 +934,7 @@ unsafe fn draw_arrow(
 }
 
 unsafe fn draw_edge_label(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     edge: &ArchitectureEdgeLine,
     pts: &[(f32, f32)],
     scale: f32,
@@ -1022,7 +1022,7 @@ fn edge_font(scale: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

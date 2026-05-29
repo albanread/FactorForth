@@ -117,7 +117,7 @@ pub(crate) unsafe fn sequence_dot_style(factory: &ID2D1Factory1) -> &'static ID2
 /// `scale`. Stroke widths and font sizes are interpreted as on-screen pixels.
 /// Dispatches on the diagram variant.
 pub unsafe fn draw_graph(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &Graph,
     ox: f32,
@@ -162,7 +162,7 @@ pub(crate) unsafe fn build_polygon_pub(
 }
 
 unsafe fn draw_flowchart(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &FlowchartGraph,
     ox: f32,
@@ -248,7 +248,7 @@ unsafe fn draw_flowchart(
 // ── Node ───────────────────────────────────────────────────────────────────
 
 unsafe fn draw_node(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     n: &Node,
     tx: &impl Fn(f32) -> f32,
@@ -634,7 +634,7 @@ unsafe fn draw_node(
 // ── Edge ───────────────────────────────────────────────────────────────────
 
 unsafe fn draw_edge(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     e: &Edge,
     tx: &impl Fn(f32) -> f32,
@@ -732,7 +732,7 @@ unsafe fn draw_edge(
 
 /// Draw an arrowhead at `a`, pointing along the segment from `b` to `a`.
 unsafe fn draw_arrow(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     b: (f32, f32),
     a: (f32, f32),

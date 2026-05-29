@@ -292,7 +292,7 @@ fn lighten(color: u32) -> u32 {
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &TimelineGraph,
     ox: f32,
@@ -343,7 +343,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_section(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     section: &TimelineSectionBox,
     tx: &impl Fn(f32) -> f32,
     ty: &impl Fn(f32) -> f32,
@@ -387,7 +387,7 @@ unsafe fn draw_section(
 }
 
 unsafe fn draw_timeline_line(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &TimelineGraph,
     scale: f32,
@@ -424,7 +424,7 @@ unsafe fn draw_timeline_line(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_item(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     item: &TimelineItemBox,
     graph: &TimelineGraph,
@@ -513,7 +513,7 @@ unsafe fn draw_item(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_box(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     x: f32,
     y: f32,
     w: f32,
@@ -577,7 +577,7 @@ unsafe fn draw_box(
 }
 
 unsafe fn draw_arrow(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     from: (f32, f32),
     to: (f32, f32),
@@ -622,7 +622,7 @@ fn event_font(scale: f32) -> f32 {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

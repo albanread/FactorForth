@@ -448,7 +448,7 @@ fn build_namespace_groups(nodes: &[ClassBox]) -> Vec<ClassGroup> {
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &ClassGraph,
     ox: f32,
@@ -477,7 +477,7 @@ pub unsafe fn draw(
 }
 
 unsafe fn draw_group(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     group: &ClassGroup,
     tx: &impl Fn(f32) -> f32,
     ty: &impl Fn(f32) -> f32,
@@ -527,7 +527,7 @@ unsafe fn draw_group(
 }
 
 unsafe fn draw_class_box(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     node: &ClassBox,
     tx: &impl Fn(f32) -> f32,
     ty: &impl Fn(f32) -> f32,
@@ -686,7 +686,7 @@ unsafe fn draw_class_box(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_member_line(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     member: &ClassMemberLine,
     left: f32,
     center_y: f32,
@@ -737,7 +737,7 @@ unsafe fn draw_member_line(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_edge(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     edge: &ClassEdge,
     scale: f32,
@@ -812,7 +812,7 @@ unsafe fn draw_edge(
 }
 
 unsafe fn draw_marker(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     from: (f32, f32),
     to: (f32, f32),
@@ -953,7 +953,7 @@ fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 unsafe fn draw_center_label(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     cx: f32,
     cy: f32,
@@ -987,7 +987,7 @@ unsafe fn draw_center_label(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_note(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     note: &ClassNoteBox,
     tx: &impl Fn(f32) -> f32,
@@ -1050,7 +1050,7 @@ unsafe fn draw_note(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,

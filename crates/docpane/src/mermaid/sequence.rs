@@ -441,7 +441,7 @@ fn line_kind_to_style_arrows(t: LineType) -> (MessageStyle, MessageArrow, Messag
 /// Draw a sequence diagram. Shares the signature shape of the flowchart
 /// renderer in `mermaid::render` so the dispatcher there can call either.
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &SequenceGraph,
     ox: f32,
@@ -574,7 +574,7 @@ pub unsafe fn draw(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_note(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     note: &SeqNote,
     tx: &impl Fn(f32) -> f32,
@@ -644,7 +644,7 @@ unsafe fn draw_note(
 }
 
 unsafe fn draw_message(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     m: &SeqMessage,
     scale: f32,
@@ -755,7 +755,7 @@ unsafe fn draw_message(
 }
 
 unsafe fn draw_message_arrow(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     b: (f32, f32),
     a: (f32, f32),

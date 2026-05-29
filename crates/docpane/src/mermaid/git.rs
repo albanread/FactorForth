@@ -208,7 +208,7 @@ fn route_edge(from: (f32, f32), to: (f32, f32), dir: DiagramOrientation) -> Vec<
 
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn draw(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     graph: &GitGraph,
     ox: f32,
@@ -235,7 +235,7 @@ pub unsafe fn draw(
 }
 
 unsafe fn draw_branch(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     branch: &GitBranch,
     scale: f32,
     tx: &impl Fn(f32) -> f32,
@@ -293,7 +293,7 @@ unsafe fn draw_branch(
 }
 
 unsafe fn draw_edge(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     edge: &GitEdge,
     scale: f32,
@@ -333,7 +333,7 @@ unsafe fn draw_edge(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_commit(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     commit: &GitCommit,
     scale: f32,
@@ -448,7 +448,7 @@ unsafe fn draw_commit(
 }
 
 unsafe fn draw_label(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     cx: f32,
     cy: f32,
@@ -481,7 +481,7 @@ unsafe fn draw_label(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_tag(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     factory: &ID2D1Factory1,
     text: &str,
     cx: f32,
@@ -528,7 +528,7 @@ unsafe fn draw_tag(
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     text: &str,
     rect: D2D_RECT_F,
     size: f32,
