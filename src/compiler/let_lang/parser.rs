@@ -300,24 +300,28 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// Output list — plain identifiers, no destructuring.
+    /// Output list — plain identifiers, no destructuring.  Separators
+    /// can be commas, whitespace, or both, matching the input list:
+    /// `( c )`, `( sx sy )`, and `( sx, sy )` all parse.  (Yesterday's
+    /// fix made the INPUT list separator-flexible but left this one
+    /// comma-only — so `-> ( sx sy )` errored where `( a b )` inputs
+    /// were fine.  Now both ends agree.)
     fn output_list(&mut self) -> Result<Vec<String>, LetError> {
         self.expect(&Tok::LParen)?;
         let mut out = Vec::new();
-        if self.cur.0 != Tok::RParen {
-            loop {
-                if let Tok::Ident(name) = &self.cur.0 {
-                    let n = name.clone();
-                    self.bump()?;
-                    out.push(n);
-                } else {
-                    return Err(LetError {
-                        message: format!("expected identifier, got {:?}", self.cur.0),
-                        pos: self.cur.1,
-                    });
-                }
-                if self.cur.0 == Tok::Comma { self.bump()?; }
-                else { break; }
+        loop {
+            // Skip optional commas (treat them like whitespace).
+            while self.cur.0 == Tok::Comma { self.bump()?; }
+            if self.cur.0 == Tok::RParen { break; }
+            if let Tok::Ident(name) = &self.cur.0 {
+                let n = name.clone();
+                self.bump()?;
+                out.push(n);
+            } else {
+                return Err(LetError {
+                    message: format!("expected identifier or ')', got {:?}", self.cur.0),
+                    pos: self.cur.1,
+                });
             }
         }
         self.expect(&Tok::RParen)?;
@@ -574,6 +578,22 @@ mod tests {
         assert_eq!(f.inputs.len(), 2);
         assert_eq!(f.inputs[0].name, "a");
         assert_eq!(f.inputs[1].name, "b");
+    }
+
+    #[test]
+    fn parses_space_separated_outputs() {
+        // Output list accepts spaces, like the input list (regression:
+        // it used to be comma-only, so `-> (sx sy)` errored).
+        let f = p("LET (a b) -> (sx sy) = a + b, a - b END");
+        assert_eq!(f.outputs, vec!["sx", "sy"]);
+        assert_eq!(f.results.len(), 2);
+    }
+
+    #[test]
+    fn parses_comma_separated_outputs() {
+        // Commas still work too — both separators are accepted.
+        let f = p("LET (a b) -> (sx, sy) = a + b, a - b END");
+        assert_eq!(f.outputs, vec!["sx", "sy"]);
     }
 
     #[test]

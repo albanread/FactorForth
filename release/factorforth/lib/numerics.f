@@ -25,17 +25,17 @@ GENERIC: vmag   ( v -- n )        \ magnitude / modulus
 CLASS: vec2 SLOT: x SLOT: y ;
 
 METHOD: v+ ( a:vec2 b:vec2 -- c )
-    LET ( a:vec2 as ax ay, b:vec2 as bx by ) -> ( sx, sy ) =
+    LET ( a:vec2 as ax ay, b:vec2 as bx by ) -> ( sx sy ) =
         ax + bx, ay + by
     END
     <vec2> ;
 METHOD: v- ( a:vec2 b:vec2 -- c )
-    LET ( a:vec2 as ax ay, b:vec2 as bx by ) -> ( dx, dy ) =
+    LET ( a:vec2 as ax ay, b:vec2 as bx by ) -> ( dx dy ) =
         ax - bx, ay - by
     END
     <vec2> ;
 METHOD: vscale ( v:vec2 k -- c )
-    LET ( v:vec2 as x y, k ) -> ( px, py ) =
+    LET ( v:vec2 as x y, k ) -> ( px py ) =
         x * k, y * k
     END
     <vec2> ;
@@ -54,17 +54,17 @@ METHOD: show ( v:vec2 -- )
 CLASS: complex SLOT: re SLOT: im ;
 
 METHOD: v+ ( a:complex b:complex -- c )
-    LET ( a:complex as ar ai, b:complex as br bi ) -> ( sr, si ) =
+    LET ( a:complex as ar ai, b:complex as br bi ) -> ( sr si ) =
         ar + br, ai + bi
     END
     <complex> ;
 METHOD: v- ( a:complex b:complex -- c )
-    LET ( a:complex as ar ai, b:complex as br bi ) -> ( dr, di ) =
+    LET ( a:complex as ar ai, b:complex as br bi ) -> ( dr di ) =
         ar - br, ai - bi
     END
     <complex> ;
 METHOD: vscale ( z:complex k -- c )
-    LET ( z:complex as re im, k ) -> ( pr, pi ) =
+    LET ( z:complex as re im, k ) -> ( pr pi ) =
         re * k, im * k
     END
     <complex> ;
@@ -73,13 +73,13 @@ METHOD: vmag ( z:complex -- n )
 
 \ complex-specific: the full product and the conjugate.
 : c* ( a b -- c )
-    LET ( a:complex as ar ai, b:complex as br bi ) -> ( pr, pi ) =
+    LET ( a:complex as ar ai, b:complex as br bi ) -> ( pr pi ) =
         ar * br - ai * bi,
         ar * bi + ai * br
     END
     <complex> ;
 : conj ( z -- z' )
-    LET ( z:complex as re im ) -> ( r2, i2 ) = re, -im END
+    LET ( z:complex as re im ) -> ( r2 i2 ) = re, -im END
     <complex> ;
 
 METHOD: show ( z:complex -- )
