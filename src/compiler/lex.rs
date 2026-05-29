@@ -314,6 +314,55 @@ impl<'src> Lexer<'src> {
         // `S$" hello"` as `S` and then a stray `$"`.  This is the
         // NewFactor-extension managed-string literal (#43).
         let three = self.peek3();
+
+        // ── Character literal: '<c>' and '\<esc>' ──
+        //
+        // A single-quote, one byte (or a backslash escape), then a
+        // closing single-quote pushes that byte's code as an integer:
+        //   'a'→97   ','→44   ' '→32   ':'→58   '''→39 (the quote)
+        // Backslash escapes reach the non-printables and the awkward
+        // characters unambiguously:
+        //   '\n'→10  '\t'→9   '\r'→13  '\0'→0   '\s'→32 (space)
+        //   '\\'→92  '\''→39  '\e'→27 (ESC)  '\"'→34
+        // Distinguished from tick (`' word`, get-xt) by the closing
+        // quote landing exactly where a 1-byte char — or one escape —
+        // would put it: `' foo` has a space there and stays a tick,
+        // and an unknown escape (`'\x'`) falls through to the word
+        // reader so resolve reports it.  ASCII single-byte chars only.
+        if b == b'\'' {
+            // 4-byte escape form:  '  \  <esc>  '
+            if let Some((b'\'', b'\\', esc, b'\'')) = self.peek4() {
+                if let Some(value) = decode_char_escape(esc) {
+                    self.bump(); self.bump(); self.bump(); self.bump();
+                    let end = self.pos();
+                    return Ok(Some(Token {
+                        kind: Tok::Int {
+                            value: value as i64,
+                            base: NumBase::Decimal,
+                            raw: format!("'\\{}'", esc as char),
+                        },
+                        span: Span { start, end },
+                    }));
+                }
+                // unknown escape: fall through to the word arm
+            }
+            // 3-byte literal form:  '  <byte>  '   (byte may be \ or ')
+            if let Some((b'\'', ch, b'\'')) = self.peek3() {
+                self.bump(); self.bump(); self.bump();
+                let end = self.pos();
+                return Ok(Some(Token {
+                    kind: Tok::Int {
+                        value: ch as i64,
+                        base: NumBase::Decimal,
+                        raw: format!("'{}'", ch as char),
+                    },
+                    span: Span { start, end },
+                }));
+            }
+            // otherwise: a bare tick `'` or a `'…`-prefixed word —
+            // fall through to the generic word reader below.
+        }
+
         if matches!(three, Some((b'S', b'$', b'"')) | Some((b's', b'$', b'"'))) {
             self.bump(); self.bump(); self.bump();
             if self.peek() == Some(b' ') || self.peek() == Some(b'\t') { self.bump(); }
@@ -472,6 +521,16 @@ impl<'src> Lexer<'src> {
         Some((a, b, c))
     }
 
+    /// Peek four characters as a tuple — used for the four-byte
+    /// `'\<esc>'` character-literal form.
+    fn peek4(&self) -> Option<(u8, u8, u8, u8)> {
+        let a = *self.src.get(self.i)?;
+        let b = *self.src.get(self.i + 1)?;
+        let c = *self.src.get(self.i + 2)?;
+        let d = *self.src.get(self.i + 3)?;
+        Some((a, b, c, d))
+    }
+
     /// True if the byte at offset `i + n` is whitespace or end-of-input.
     fn next_is_ws_or_eof(&self, n: usize) -> bool {
         match self.src.get(self.i + n) {
@@ -479,6 +538,25 @@ impl<'src> Lexer<'src> {
             Some(b) => matches!(*b, b' ' | b'\t' | b'\r' | b'\n'),
         }
     }
+}
+
+/// Decode a backslash escape inside a `'\x'` character literal to its
+/// byte value.  Returns None for an unrecognised escape, which the
+/// lexer treats as "not a char literal" — the token falls through to
+/// the word reader and resolve reports the unknown word.
+fn decode_char_escape(esc: u8) -> Option<u8> {
+    Some(match esc {
+        b'n'  => b'\n',   // 10  newline
+        b't'  => b'\t',   // 9   tab
+        b'r'  => b'\r',   // 13  carriage return
+        b'0'  => 0,       //  0  NUL
+        b's'  => b' ',    // 32  space
+        b'e'  => 27,      // 27  ESC
+        b'\\' => b'\\',   // 92  backslash
+        b'\'' => b'\'',   // 39  single quote
+        b'"'  => b'"',    // 34  double quote
+        _ => return None,
+    })
 }
 
 // ─── Number-vs-word classification ──────────────────────────────────────────
@@ -710,6 +788,52 @@ mod tests {
     fn binary_int() {
         let t = kinds("%1010");
         assert!(matches!(&t[0], Tok::Int { value: 10, base: NumBase::Binary, .. }));
+    }
+
+    #[test]
+    fn char_literal() {
+        // '<c>' pushes the byte's code; backslash and quote included.
+        let t = kinds("'a' ',' '\\' ':' ''' ' '");
+        assert!(matches!(&t[0], Tok::Int { value: 97, .. }), "'a' = 97");
+        assert!(matches!(&t[1], Tok::Int { value: 44, .. }), "',' = 44");
+        assert!(matches!(&t[2], Tok::Int { value: 92, .. }), "'\\' = 92");
+        assert!(matches!(&t[3], Tok::Int { value: 58, .. }), "':' = 58");
+        assert!(matches!(&t[4], Tok::Int { value: 39, .. }), "''' = 39 (the quote)");
+        assert!(matches!(&t[5], Tok::Int { value: 32, .. }), "' ' = 32 (space)");
+    }
+
+    #[test]
+    fn tick_is_not_a_char_literal() {
+        // `' word` (tick, space) stays a word, not a char literal.
+        let t = kinds("' foo");
+        assert!(matches!(&t[0], Tok::Word(w) if w == "'"), "tick word");
+        assert!(matches!(&t[1], Tok::Word(w) if w == "foo"), "the ticked word");
+    }
+
+    #[test]
+    fn char_literal_escapes() {
+        // '\<esc>' four-byte forms decode to the byte's code.
+        let t = kinds(r#"'\n' '\t' '\r' '\0' '\s' '\\' '\'' '\e' '\"'"#);
+        assert!(matches!(&t[0], Tok::Int { value: 10, .. }), "backslash-n = 10");
+        assert!(matches!(&t[1], Tok::Int { value: 9,  .. }), "backslash-t = 9");
+        assert!(matches!(&t[2], Tok::Int { value: 13, .. }), "backslash-r = 13");
+        assert!(matches!(&t[3], Tok::Int { value: 0,  .. }), "backslash-0 = 0");
+        assert!(matches!(&t[4], Tok::Int { value: 32, .. }), "backslash-s = 32 (space)");
+        assert!(matches!(&t[5], Tok::Int { value: 92, .. }), "backslash-backslash = 92");
+        assert!(matches!(&t[6], Tok::Int { value: 39, .. }), "backslash-quote = 39");
+        assert!(matches!(&t[7], Tok::Int { value: 27, .. }), "backslash-e = 27 (ESC)");
+        assert!(matches!(&t[8], Tok::Int { value: 34, .. }), "backslash-dquote = 34");
+    }
+
+    #[test]
+    fn char_literal_unknown_escape_is_word() {
+        // '\x' is not a known escape — it falls through to the word
+        // reader (resolve reports the unknown word), rather than
+        // lexing as some surprising character.
+        let t = kinds(r"'\x'");
+        assert_eq!(t.len(), 1);
+        assert!(matches!(&t[0], Tok::Word(w) if w == r"'\x'"),
+                "expected Word(\"'\\x'\"), got {:?}", t[0]);
     }
 
     #[test]

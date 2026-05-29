@@ -76,16 +76,16 @@ fn split_and_join() {
     let (s, out, mut ctx) = fresh();
     load_layers(&s, &mut ctx);
     run(&s, &mut ctx, r#"
-        \ "a,bb,ccc" split on ',' -> 3 fields
-        S" a,bb,ccc" >string 44 split VALUE parts   \ 44 = ','
+        \ "a,bb,ccc" split on ',' -> 3 fields  (char-literal sugar)
+        S" a,bb,ccc" >string ',' split VALUE parts
         ." n=" parts size .                          \ 3
         ." p0=" 0 parts at show                      \ a
         ." |p1=" 1 parts at show                     \ bb
         ." |p2=" 2 parts at show                     \ ccc
-        \ join the same parts with '-' (45)
-        ." |joined=" parts 45 join show              \ a-bb-ccc
+        \ join the same parts with '-'
+        ." |joined=" parts '-' join show             \ a-bb-ccc
         \ round-trip: split then join on the same delim reproduces input
-        ." |rt=" S" x:y:z" >string 58 split 58 join show   \ x:y:z
+        ." |rt=" S" x:y:z" >string ':' split ':' join show   \ x:y:z
     "#);
     let cap = captured(&out);
     eprintln!("captured: {cap:?}");
