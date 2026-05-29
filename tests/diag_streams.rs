@@ -67,6 +67,20 @@ fn string_value_type() {
     assert!(cap.contains("cat=foobar"), "string-append: {cap}");
 }
 
+/// read-line splits an input stream on newlines, returning a string
+/// per line (newline consumed, not included).
+#[test]
+#[ignore]
+fn read_line_splits_on_newline() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, "S\" line1\nline2\" str>reader VALUE r\n        .\" L1=\" r read-line show\n        .\" |L2=\" r read-line show\n        .\" |\"");
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("L1=line1"), "first line: {cap}");
+    assert!(cap.contains("L2=line2"), "second line: {cap}");
+}
+
 /// Roundtrip: a string-reader, drained into a writer via `read-all`
 /// (which uses the derived `copy-stream`), reproduces the input.
 #[test]

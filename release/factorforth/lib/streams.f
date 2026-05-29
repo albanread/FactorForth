@@ -108,6 +108,23 @@ METHOD: write-char ( ch w:string-writer -- )
 : str>reader ( c-addr u -- r )  >string string>reader ;
 : writer-emit ( w -- )          writer>string show ;
 
+\ Read one line (up to a newline, code 10) from an input stream into a
+\ fresh string.  The newline is consumed but not included; at <eof> you
+\ get whatever was read (empty if the stream was already drained).
+: read-line ( in -- s )
+    new-string                 ( in s )
+    BEGIN
+        over read-char         ( in s ch )
+        dup eof? IF
+            drop -1            ( done at eof )
+        ELSE dup 10 = IF
+            drop -1            ( done at newline )
+        ELSE
+            over string-push 0 ( appended; keep going )
+        THEN THEN
+    UNTIL
+    nip ;
+
 \ ── derived protocol words (write ONCE, work for any stream) ──────
 \
 \ Pump every character from `in` to `out` until <eof>.  Each iteration
