@@ -183,6 +183,43 @@ pub unsafe fn fill_rect(target: &ID2D1RenderTarget, x: f32, y: f32, w: f32, h: f
     }
 }
 
+/// Draw a single run of text within a rect (DIPs), clipped.  Left/top
+/// aligned, or centred when `center` (used for a doc-pane's toggle
+/// glyph).  Host chrome helper — same font cache as the document text.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn draw_text(
+    target: &ID2D1RenderTarget,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    text: &str,
+    font: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    hex: u32,
+    center: bool,
+) {
+    let (Ok(fmt), Ok(br)) = (get_fmt(font, size, bold, italic), brush(target, hex)) else {
+        return;
+    };
+    if center {
+        let _ = fmt.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        let _ = fmt.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    }
+    let tw: Vec<u16> = text.encode_utf16().collect();
+    let r = D2D_RECT_F { left: x, top: y, right: x + w, bottom: y + h };
+    target.DrawText(
+        &tw,
+        &fmt,
+        std::ptr::addr_of!(r),
+        &br,
+        D2D1_DRAW_TEXT_OPTIONS_CLIP,
+        DWRITE_MEASURING_MODE_NATURAL,
+    );
+}
+
 /// Render a laid-out document into `target` at a vertical scroll offset.
 ///
 /// `scroll_y` is the number of DIPs scrolled down (0 = top); `viewport_h`
