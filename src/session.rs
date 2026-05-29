@@ -672,6 +672,7 @@ const TOOLS_SETUP_SRC: &str = r#"
 USING: kernel math math.parser sequences arrays vectors strings
        byte-arrays io classes words quotations vocabs grouping
        namespaces accessors combinators prettyprint.config
+       assocs hashtables sets hash-sets
        forth.runtime ;
 IN: forth.runtime
 
@@ -781,6 +782,34 @@ IN: forth.runtime
 ! sequence's elements); collections override `clone` to deep-copy
 ! their backing.  Exposed to ANS as `(clone)`.
 : nf-clone ( obj -- copy ) clone ;
+
+! ── dict backing: a Factor hashtable ─────────────────────────────────
+! Wraps assocs ops for CoreProtocols' `dict`.  Keys/values are any
+! value.  `at*` returns (value present?), which bool>flag turns into
+! the ANS (value flag) two-return shape (so a stored f / 0 is never
+! confused with "missing").  Arg orders match the collection-on-top
+! convention.  assocs / sets are in this vocab's USING (unqualified) —
+! qualified `vocab:word` refs don't resolve at boot time, since the
+! named vocab isn't in the search path yet on the very first eval.
+: nf-hash-new    ( -- h )              8 <hashtable> ;
+: nf-hash-at     ( key h -- value ? )  at* bool>flag ;
+: nf-hash-set    ( value key h -- )    set-at ;
+: nf-hash-key?   ( key h -- ? )        key? bool>flag ;
+: nf-hash-del    ( key h -- )          delete-at ;
+: nf-hash-len    ( h -- n )            assoc-size ;
+: nf-hash-keys   ( h -- vec )          keys   >vector ;
+: nf-hash-values ( h -- vec )          values >vector ;
+
+! ── set backing: a Factor hash-set ───────────────────────────────────
+! Wraps the sets protocol for CoreProtocols' `set`.  Membership is
+! O(1) via the hash.  `delete` / `members` are sets-only (no clash with
+! the other USING vocabs), so unqualified is safe.
+: nf-set-new     ( -- s )        8 <hash-set> ;
+: nf-set-add     ( elt s -- )    adjoin ;
+: nf-set-has?    ( elt s -- ? )  in? bool>flag ;
+: nf-set-del     ( elt s -- )    delete ;
+: nf-set-len     ( s -- n )      cardinality ;
+: nf-set-members ( s -- vec )    members >vector ;
 "#;
 
 fn worker_main(

@@ -107,6 +107,47 @@ METHOD: clone ( g:grid -- copy )
 METHOD: clone ( d:darray -- copy )
     darray>data (clone) <darray> ;
 
+\ ── dict — a key→value map ───────────────────────────────────────
+\
+\ Backed by a Factor hashtable.  Keys and values are any value; lookup,
+\ insert, and membership are O(1).  A dict is a KEYED collection, not a
+\ positional one, so it implements `size` but not the linear `at`/`at!`
+\ — iterate it through `dict-keys` / `dict-values`, which hand back a
+\ darray that DOES support each/map/fold.
+\
+\ `dict-at` returns two values — the value and a found flag — so a
+\ stored 0 or f is never mistaken for "missing" (the same idiom as
+\ find / index-of).
+CLASS: dict SLOT: data ;
+
+: new-dict    ( -- d )             <hash> <dict> ;
+: dict-at     ( key d -- value ? ) dict>data hash-at ;
+: dict-set    ( value key d -- )   dict>data hash! ;
+: dict-has?   ( key d -- ? )       dict>data hash-key? ;
+: dict-del    ( key d -- )         dict>data hash-del ;
+: dict-keys   ( d -- keys )        dict>data hash-keys <darray> ;
+: dict-values ( d -- vals )        dict>data hash-vals <darray> ;
+
+METHOD: size  ( d:dict -- n )      dict>data hash-len ;
+METHOD: clone ( d:dict -- copy )   dict>data (clone) <dict> ;
+
+\ ── set — a collection of unique values ──────────────────────────
+\
+\ Backed by a Factor hash-set.  Membership (`set-has?`) is O(1) via the
+\ hash — distinct from the sequence `member?`, which scans linearly
+\ through `equals?`.  Like dict, it's unordered: `size` yes, linear
+\ `at` no; iterate via `set-members`.
+CLASS: set SLOT: data ;
+
+: new-set     ( -- s )         <hashset> <set> ;
+: set-add     ( elt s -- )     set>data hs-add ;
+: set-has?    ( elt s -- ? )   set>data hs-in? ;
+: set-del     ( elt s -- )     set>data hs-del ;
+: set-members ( s -- members ) set>data hs-members <darray> ;
+
+METHOD: size  ( s:set -- n )    set>data hs-len ;
+METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
+
 \ ── Algorithms over the protocol ─────────────────────────────────
 \
 \ Written ONCE against size/at — they work on any collection that

@@ -1,7 +1,8 @@
 # Collections — the protocol reference
 
 This is the reference for **CoreProtocols Layer 1**: the collection
-protocol and the two collections that ship today (`grid` and `darray`),
+protocol and the collections that ship today (`grid`, `darray`, `dict`,
+and `set`),
 plus the algorithms that ride the protocol.
 
 If you want the *why* — the CLOS dispatch model, the layer map, the
@@ -45,11 +46,15 @@ flowchart TB
     subgraph Backings["Concrete collections"]
         G["grid — 2-D, w x h"]
         D["darray — growable 1-D"]
+        DI["dict — keyed map"]
+        SE["set — unique values"]
     end
 
     Algos --> Protocol
     G -.implements.-> Protocol
     D -.implements.-> Protocol
+    DI -.size only.-> Protocol
+    SE -.size only.-> Protocol
 ```
 
 The payoff is *openness*: a class you write later joins the protocol by
@@ -150,6 +155,68 @@ xs size .          \ 3
 2 xs at .          \ 30
 99 1 xs at!        \ overwrite element 1
 1 xs at .          \ 99
+```
+
+---
+
+## dict — a key→value map
+
+A hashtable-backed map. Keys and values are any value; lookup, insert,
+and membership are O(1). A dict is a *keyed* collection, not a
+positional one — it implements `size` but not the linear `at`/`at!`.
+Iterate it through `dict-keys` / `dict-values`, which return a darray
+that supports the full sequence protocol (each / map / fold).
+
+| word          | stack effect          | description                                   |
+|---------------|-----------------------|-----------------------------------------------|
+| `new-dict`    | `( -- d )`            | a fresh, empty dict                           |
+| `dict-set`    | `( value key d -- )`  | store `value` under `key` (overwrites)        |
+| `dict-at`     | `( key d -- value ? )`| look up — value **and** a found flag          |
+| `dict-has?`   | `( key d -- ? )`      | is `key` present?                             |
+| `dict-del`    | `( key d -- )`        | remove `key`                                  |
+| `dict-keys`   | `( d -- darray )`     | the keys, as a darray                         |
+| `dict-values` | `( d -- darray )`     | the values, as a darray                       |
+
+`dict-at` returns two values — the value and a found flag — so a stored
+`0` is never mistaken for "missing" (the same idiom as `find`).
+
+```forth
+new-dict VALUE d
+111 1 d dict-set         \ d[1] = 111
+222 2 d dict-set
+333 1 d dict-set         \ overwrite key 1
+d size .                 \ 2
+1 d dict-has? .          \ -1
+1 d dict-at swap . .     \ 333 -1   (value, found)
+d dict-keys 0 ' + fold . \ 3   (keys feed the algorithms)
+1 d dict-del
+1 d dict-has? .          \ 0
+```
+
+## set — unique values
+
+A hash-set: a collection of distinct values, with O(1) membership.
+`set-has?` is the fast, hash-based test — distinct from the sequence
+`member?`, which scans linearly through `equals?`. Like dict, a set is
+unordered (`size` yes, linear `at` no); iterate via `set-members`.
+
+| word          | stack effect      | description                          |
+|---------------|-------------------|--------------------------------------|
+| `new-set`     | `( -- s )`        | a fresh, empty set                   |
+| `set-add`     | `( elt s -- )`    | add `elt` (a duplicate is a no-op)   |
+| `set-has?`    | `( elt s -- ? )`  | is `elt` a member?                   |
+| `set-del`     | `( elt s -- )`    | remove `elt`                         |
+| `set-members` | `( s -- darray )` | the members, as a darray             |
+
+```forth
+new-set VALUE st
+10 st set-add
+20 st set-add
+10 st set-add            \ duplicate — no-op
+st size .                \ 2
+10 st set-has? .         \ -1
+99 st set-has? .         \ 0
+st set-members 0 ' + fold .   \ 30
 ```
 
 ---

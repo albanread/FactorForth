@@ -427,6 +427,22 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("call1>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1>"      }),
         ("call2>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call2>"      }),
         ("(clone)",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-clone"       }),
+        // dict (hashtable) backing primitives.
+        ("<hash>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-new"    }),
+        ("hash-at",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-at"     }),
+        ("hash!",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-set"    }),
+        ("hash-key?",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-key?"   }),
+        ("hash-del",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-del"    }),
+        ("hash-len",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-len"    }),
+        ("hash-keys",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-keys"   }),
+        ("hash-vals",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-values" }),
+        // set (hash-set) backing primitives.
+        ("<hashset>",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-new"     }),
+        ("hs-add",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-add"     }),
+        ("hs-in?",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-has?"    }),
+        ("hs-del",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-del"     }),
+        ("hs-len",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-len"     }),
+        ("hs-members", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-members" }),
 
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),

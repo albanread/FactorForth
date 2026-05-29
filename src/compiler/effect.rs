@@ -371,6 +371,22 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("call1>",      e(2, 1)); // x xt -- y
     m.insert("call2>",      e(3, 1)); // a b xt -- y
     m.insert("(clone)",     e(1, 1)); // obj -- copy
+    // dict (hashtable) backing primitives.
+    m.insert("<hash>",      e(0, 1)); // -- h
+    m.insert("hash-at",     e(2, 2)); // key h -- value ?
+    m.insert("hash!",       e(3, 0)); // value key h --
+    m.insert("hash-key?",   e(2, 1)); // key h -- ?
+    m.insert("hash-del",    e(2, 0)); // key h --
+    m.insert("hash-len",    e(1, 1)); // h -- n
+    m.insert("hash-keys",   e(1, 1)); // h -- vec
+    m.insert("hash-vals",   e(1, 1)); // h -- vec
+    // set (hash-set) backing primitives.
+    m.insert("<hashset>",   e(0, 1)); // -- s
+    m.insert("hs-add",      e(2, 0)); // elt s --
+    m.insert("hs-in?",      e(2, 1)); // elt s -- ?
+    m.insert("hs-del",      e(2, 0)); // elt s --
+    m.insert("hs-len",      e(1, 1)); // s -- n
+    m.insert("hs-members",  e(1, 1)); // s -- vec
 
     m
 }

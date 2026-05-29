@@ -540,6 +540,67 @@ fn member_and_index_of_search_by_value() {
     assert!(cap.contains("miss=0 0"), "index-of miss -> 0 and false: {cap}");
 }
 
+/// `dict` — a key→value map.  set/get/overwrite/has?/del, `size`, and
+/// `dict-keys` (which hands back a darray the algorithms work on).
+#[test]
+#[ignore]
+fn dict_maps_keys_to_values() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE d
+        111 1 d dict-set
+        222 2 d dict-set
+        333 1 d dict-set          \ overwrite key 1
+        ." n=" d size .            \ 2  (still two keys)
+        ." has1=" 1 d dict-has? .  \ -1
+        ." has9=" 9 d dict-has? .  \ 0
+        1 d dict-at ." v1=" swap . .   \ 333 -1 (latest value, found)
+        \ keys feed the sequence algorithms; sum is order-independent
+        ." ksum=" d dict-keys 0 ' + fold .   \ 1+2 = 3
+        1 d dict-del
+        ." after=" d size .        \ 1
+        ." has1b=" 1 d dict-has? .  \ 0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=2"), "two distinct keys: {cap}");
+    assert!(cap.contains("has1=-1") && cap.contains("has9=0"), "has?: {cap}");
+    assert!(cap.contains("v1=333 -1"), "overwrite + found flag: {cap}");
+    assert!(cap.contains("ksum=3"), "dict-keys feeds fold: {cap}");
+    assert!(cap.contains("after=1") && cap.contains("has1b=0"), "delete: {cap}");
+}
+
+/// `set` — a collection of unique values.  add (dup-safe) / has? (O(1))
+/// / del, `size`, and `set-members` for iteration.
+#[test]
+#[ignore]
+fn set_holds_unique_values() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-set VALUE st
+        10 st set-add
+        20 st set-add
+        10 st set-add             \ duplicate — no-op
+        ." n=" st size .           \ 2
+        ." has10=" 10 st set-has? .   \ -1
+        ." has99=" 99 st set-has? .   \ 0
+        ." msum=" st set-members 0 ' + fold .   \ 10+20 = 30
+        10 st set-del
+        ." after=" st size .       \ 1
+        ." has10b=" 10 st set-has? .  \ 0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=2"), "duplicate add is a no-op: {cap}");
+    assert!(cap.contains("has10=-1") && cap.contains("has99=0"), "membership: {cap}");
+    assert!(cap.contains("msum=30"), "set-members feeds fold: {cap}");
+    assert!(cap.contains("after=1") && cap.contains("has10b=0"), "delete: {cap}");
+}
+
 // ── Phase 1 capstone: text Othello ──────────────────────────────
 
 /// The opening position renders as the standard Othello board — the
