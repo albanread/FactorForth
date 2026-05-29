@@ -13,6 +13,10 @@ path = "src/lib.rs"
 # + Win32 windowing, COM, HiDPI, VEH for the crash handler).
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
+# The doc-pane render core (markdown + Mermaid -> Direct2D), shared with
+# the standalone doc-crate.exe test harness.  Pulls in selkie + pest +
+# fontdue + pulldown-cmark — already shipped in the product, now linked.
+docpane = { path = "../docpane" }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"

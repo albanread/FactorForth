@@ -88,6 +88,9 @@ pub(crate) const WM_IGUI_FCONSOLE_FLUSH: u32 = WM_USER + 9;
 /// a future VEH path); flush the captured dumps into the crash
 /// view, opening it if it isn't already.  wparam/lparam unused.
 pub(crate) const WM_IGUI_CRASH_FLUSH: u32 = WM_USER + 10;
+/// Open a built-in doc-pane MDI child rendering a Markdown string.
+/// Same marshaling rationale as WM_IGUI_OPEN_TEXT.
+const WM_IGUI_OPEN_DOC: u32 = WM_USER + 11;
 /// Sent from the language thread to a render-host HWND to install
 /// or clear a Win32 timer driving `EvTick` events.
 /// `wparam` carries the interval in ms (0 = clear), `lparam` is unused.
@@ -804,6 +807,17 @@ unsafe extern "system" fn frame_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_IGUI_OPEN_DOC => {
+            let req_ptr = lparam.0 as *mut OpenDocRequest;
+            if !req_ptr.is_null() {
+                let req = unsafe { &mut *req_ptr };
+                if let Some(mdi_client) = mdi_client_hwnd() {
+                    req.out =
+                        super::doc_pane::create_on_gui_thread(mdi_client, &req.title, &req.md);
+                }
+            }
+            LRESULT(0)
+        }
         WM_IGUI_TEXT_FLUSH => {
             let child_id = wparam.0 as i64;
             super::text_view::flush_on_gui_thread(child_id);
@@ -1281,6 +1295,12 @@ pub(crate) struct OpenTextRequest {
     pub out: Option<i64>,
 }
 
+pub(crate) struct OpenDocRequest {
+    pub title: Vec<u16>,
+    pub md: String,
+    pub out: Option<i64>,
+}
+
 pub(crate) struct CloseChildRequest {
     pub child_id: i64,
     pub ok: bool,
@@ -1365,6 +1385,29 @@ pub fn open_text_child(title: &str) -> Option<i64> {
         SendMessageW(
             frame,
             WM_IGUI_OPEN_TEXT,
+            Some(WPARAM(0)),
+            Some(LPARAM(&mut req as *mut _ as isize)),
+        )
+    };
+    req.out
+}
+
+/// Open a doc-pane MDI child rendering `md`.  Marshals to the GUI
+/// thread (state alloc + WM_MDICREATE) like `open_text_child`.
+pub fn open_doc_child(title: &str, md: &str) -> Option<i64> {
+    let frame_raw = *FRAME_HWND.get()?;
+    let frame = HWND(frame_raw as *mut _);
+    let mut title_w: Vec<u16> = title.encode_utf16().collect();
+    title_w.push(0);
+    let mut req = OpenDocRequest {
+        title: title_w,
+        md: md.to_owned(),
+        out: None,
+    };
+    unsafe {
+        SendMessageW(
+            frame,
+            WM_IGUI_OPEN_DOC,
             Some(WPARAM(0)),
             Some(LPARAM(&mut req as *mut _ as isize)),
         )

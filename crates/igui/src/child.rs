@@ -1607,6 +1607,7 @@ pub fn register_classes() -> Result<(), IGuiError> {
     super::stack_view::register_class()?;
     super::crash_view::register_class()?;
     super::text_view::register_class()?;
+    super::doc_pane::register_class()?;
 
     Ok(())
 }
