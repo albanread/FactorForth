@@ -58,6 +58,9 @@ pub fn compute_class_slots(
 ///
 ///   - the class name itself (so `M: cls gen …` resolves)
 ///   - `<classname>` — constructor
+///   - `classname?` — membership predicate, `( x -- ? )` (Factor's
+///     `TUPLE:` auto-generates the word; we just register the name so
+///     calls resolve)
 ///   - `classname>slotname`  — getter, `( p -- v )`
 ///   - `slotname>>classname` — chainable setter, `( p v -- p )`
 ///   - `classname.slotname!` — ANS-flavoured store, `( v p -- )`
@@ -72,6 +75,7 @@ pub fn class_synthesised_names(c: &ClassDef, all_slots: &[String]) -> Vec<(Strin
     let mut names: Vec<(String, Span)> = Vec::with_capacity(2 + all_slots.len() * 3);
     names.push((class_lc.clone(), c.name_span));
     names.push((format!("<{class_lc}>"), c.name_span));
+    names.push((format!("{class_lc}?"), c.name_span));
     for s in all_slots {
         names.push((format!("{class_lc}>{s}"), c.name_span));
         names.push((format!("{s}>>{class_lc}"), c.name_span));

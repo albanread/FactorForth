@@ -424,6 +424,16 @@ pub fn build_with_prior_state(
                 declared_inputs:  Some(n_slots),
                 declared_outputs: Some(1),
             });
+            // Membership predicate: classname?  ( x -- ? ).  Factor's
+            // TUPLE: auto-generates the word; we register + size it so
+            // calls resolve and the effect checker can size them, and
+            // so it persists across evals like the other synth names.
+            user_words.entry(format!("{class_lc}?")).or_insert(UserWord {
+                name: format!("{}?", c.name),
+                def_span: c.name_span,
+                declared_inputs:  Some(1),
+                declared_outputs: Some(1),
+            });
             // Per-slot accessors.
             for s in all_slots {
                 user_words.entry(format!("{class_lc}>{s}")).or_insert(UserWord {
