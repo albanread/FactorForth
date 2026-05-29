@@ -67,6 +67,34 @@ fn string_value_type() {
     assert!(cap.contains("cat=foobar"), "string-append: {cap}");
 }
 
+/// split breaks a string on a delimiter char into a darray of strings;
+/// join glues them back with a (possibly different) delimiter.  They
+/// round-trip.
+#[test]
+#[ignore]
+fn split_and_join() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        \ "a,bb,ccc" split on ',' -> 3 fields
+        S" a,bb,ccc" >string 44 split VALUE parts   \ 44 = ','
+        ." n=" parts size .                          \ 3
+        ." p0=" 0 parts at show                      \ a
+        ." |p1=" 1 parts at show                     \ bb
+        ." |p2=" 2 parts at show                     \ ccc
+        \ join the same parts with '-' (45)
+        ." |joined=" parts 45 join show              \ a-bb-ccc
+        \ round-trip: split then join on the same delim reproduces input
+        ." |rt=" S" x:y:z" >string 58 split 58 join show   \ x:y:z
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=3"), "field count: {cap}");
+    assert!(cap.contains("p0=a") && cap.contains("p1=bb") && cap.contains("p2=ccc"), "fields: {cap}");
+    assert!(cap.contains("joined=a-bb-ccc"), "join: {cap}");
+    assert!(cap.contains("rt=x:y:z"), "split/join round-trip: {cap}");
+}
+
 /// read-line splits an input stream on newlines, returning a string
 /// per line (newline consumed, not included).
 #[test]

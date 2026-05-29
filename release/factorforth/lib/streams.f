@@ -125,6 +125,48 @@ METHOD: write-char ( ch w:string-writer -- )
     UNTIL
     nip ;
 
+\ ── split / join ─────────────────────────────────────────────────
+\
+\ split breaks a string into a darray of strings on a delimiter
+\ character; join glues a darray of strings back together with a
+\ (possibly different) delimiter character.  They round-trip:
+\   s d split  d join   ==  s
+\
+\ The delimiter is held in a VARIABLE (an integer char code — safe in
+\ raw variable storage, unlike an object reference) so the loops can
+\ use I / read-char without juggling it on the stacks.
+VARIABLE delim-var
+
+\ split ( s delim -- coll ).  coll always carries the current field as
+\ its last element; a delimiter starts a fresh empty field, any other
+\ char extends the last one.  Reads via the stream protocol.
+: split ( s delim -- coll )
+    delim-var !                          ( s )
+    string>reader >r                     ( -- ; R: reader )
+    new-darray new-string over d-push    ( coll is [ "" ] )
+    BEGIN
+        r@ read-char                     ( coll ch )
+        dup eof? IF
+            drop -1
+        ELSE dup delim-var @ = IF
+            drop  new-string over d-push  0
+        ELSE
+            over dup size 1- swap at string-push  0
+        THEN THEN
+    UNTIL
+    r> drop ;
+
+\ join ( coll delim -- s ).  Append each field; insert the delimiter
+\ before every field but the first.
+: join ( coll delim -- s )
+    delim-var !                          ( coll )
+    new-string                           ( coll s )
+    over size 0 ?DO
+        I 0 > IF  delim-var @ over string-push  THEN
+        over I swap at over append-into
+    LOOP
+    nip ;
+
 \ ── derived protocol words (write ONCE, work for any stream) ──────
 \
 \ Pump every character from `in` to `out` until <eof>.  Each iteration
