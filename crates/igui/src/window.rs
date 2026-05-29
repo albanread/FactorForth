@@ -208,30 +208,25 @@ pub(crate) fn demo_files_snapshot() -> Vec<(u16, String, std::path::PathBuf)> {
 ///   1. `<exe_dir>/docs/coreprotocols.md`           — production install
 ///   2. `CARGO_MANIFEST_DIR/release/factorforth/docs/coreprotocols.md` — dev
 pub(crate) fn open_docs() {
-    let exe_doc = std::env::current_exe().ok().and_then(|p| {
-        p.parent().map(|d| d.join("docs").join("coreprotocols.md"))
-    });
+    // Resolve the docs *folder* — the doc-pane scans it, shows a sidebar
+    // table-of-contents, and opens the first page (index/readme).
+    let exe_docs = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("docs")));
     // CARGO_MANIFEST_DIR here is crates/igui; the release docs live two
     // levels up at <repo>/release/factorforth/docs.
-    let dev_doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let dev_docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
-        .map(|root| root.join("release/factorforth/docs/coreprotocols.md"));
+        .map(|root| root.join("release/factorforth/docs"));
 
-    let path = exe_doc
-        .filter(|p| p.is_file())
-        .or_else(|| dev_doc.filter(|p| p.is_file()));
+    let docs_dir = exe_docs
+        .filter(|p| p.is_dir())
+        .or_else(|| dev_docs.filter(|p| p.is_dir()));
 
-    let Some(path) = path else {
-        eprintln!("[docs] manual page not found (looked next to the exe and in the source tree)");
+    let Some(docs_dir) = docs_dir else {
+        eprintln!("[docs] docs/ folder not found (looked next to the exe and in the source tree)");
         return;
-    };
-    let md = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[docs] read {}: {e}", path.display());
-            return;
-        }
     };
 
     let Some(mdi) = mdi_client_hwnd() else {
@@ -239,7 +234,7 @@ pub(crate) fn open_docs() {
         return;
     };
     let title: Vec<u16> = "Manual\u{0}".encode_utf16().collect();
-    super::doc_pane::create_on_gui_thread(mdi, &title, &md);
+    super::doc_pane::create_on_gui_thread(mdi, &title, &docs_dir.to_string_lossy());
 }
 
 /// Scan for `demos/*.f` files and return `(menu_id, display_name, path)`
@@ -784,7 +779,7 @@ unsafe extern "system" fn frame_wnd_proc(
                 let req = unsafe { &mut *req_ptr };
                 if let Some(mdi_client) = mdi_client_hwnd() {
                     req.out =
-                        super::doc_pane::create_on_gui_thread(mdi_client, &req.title, &req.md);
+                        super::doc_pane::create_on_gui_thread(mdi_client, &req.title, &req.path);
                 }
             }
             LRESULT(0)
@@ -1268,7 +1263,8 @@ pub(crate) struct OpenTextRequest {
 
 pub(crate) struct OpenDocRequest {
     pub title: Vec<u16>,
-    pub md: String,
+    /// A docs folder (→ sidebar) or a single `.md` file path.
+    pub path: String,
     pub out: Option<i64>,
 }
 
@@ -1363,16 +1359,16 @@ pub fn open_text_child(title: &str) -> Option<i64> {
     req.out
 }
 
-/// Open a doc-pane MDI child rendering `md`.  Marshals to the GUI
-/// thread (state alloc + WM_MDICREATE) like `open_text_child`.
-pub fn open_doc_child(title: &str, md: &str) -> Option<i64> {
+/// Open a doc-pane MDI child browsing `path` (a docs folder, or a single
+/// `.md` file).  Marshals to the GUI thread like `open_text_child`.
+pub fn open_doc_child(title: &str, path: &str) -> Option<i64> {
     let frame_raw = *FRAME_HWND.get()?;
     let frame = HWND(frame_raw as *mut _);
     let mut title_w: Vec<u16> = title.encode_utf16().collect();
     title_w.push(0);
     let mut req = OpenDocRequest {
         title: title_w,
-        md: md.to_owned(),
+        path: path.to_owned(),
         out: None,
     };
     unsafe {

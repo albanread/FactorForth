@@ -173,6 +173,16 @@ unsafe fn brush(t: &ID2D1RenderTarget, hex: u32) -> Result<ID2D1SolidColorBrush>
     t.CreateSolidColorBrush(std::ptr::addr_of!(c), None)
 }
 
+/// Fill a solid rectangle (DIPs) in `hex` colour.  A host uses this for
+/// chrome it draws around the document — e.g. a doc-pane's sidebar
+/// background and divider.
+pub unsafe fn fill_rect(target: &ID2D1RenderTarget, x: f32, y: f32, w: f32, h: f32, hex: u32) {
+    if let Ok(br) = brush(target, hex) {
+        let r = D2D_RECT_F { left: x, top: y, right: x + w, bottom: y + h };
+        target.FillRectangle(std::ptr::addr_of!(r), &br);
+    }
+}
+
 /// Render a laid-out document into `target` at a vertical scroll offset.
 ///
 /// `scroll_y` is the number of DIPs scrolled down (0 = top); `viewport_h`
