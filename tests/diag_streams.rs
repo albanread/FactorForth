@@ -42,6 +42,31 @@ fn load_layers(s: &Session, ctx: &mut CompileContext) {
     run(s, ctx, STREAMS);
 }
 
+/// The `string` value type: build from a literal, show it, measure it,
+/// index it, compare it (Layer 0 equals?), and concatenate.
+#[test]
+#[ignore]
+fn string_value_type() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." show=" S" abc" >string show           \ abc
+        ." len=" S" abcde" >string size .         \ 5
+        ." at=" 1 S" abc" >string at .             \ 98 (b)
+        ." eq=" S" ab" >string S" ab" >string equals? .    \ -1
+        ." ne=" S" ab" >string S" ax" >string equals? .    \ 0
+        ." cat=" S" foo" >string S" bar" >string string-append show  \ foobar
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("show=abc"), "show: {cap}");
+    assert!(cap.contains("len=5"), "size: {cap}");
+    assert!(cap.contains("at=98"), "at: {cap}");
+    assert!(cap.contains("eq=-1"), "equals? true: {cap}");
+    assert!(cap.contains("ne=0"), "equals? false: {cap}");
+    assert!(cap.contains("cat=foobar"), "string-append: {cap}");
+}
+
 /// Roundtrip: a string-reader, drained into a writer via `read-all`
 /// (which uses the derived `copy-stream`), reproduces the input.
 #[test]

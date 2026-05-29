@@ -2,109 +2,127 @@
 \
 \ Load after core.f and collections.f.
 \
-\ The signature idea of this layer: end-of-file is an OBJECT, not a
-\ flag.  `read-char` returns either a character code or the <eof>
-\ marker, and the read loop dispatches on that instead of testing a
-\ separate "did we hit the end?" boolean.  The loop becomes a method
-\ table — see copy-stream below, written ONCE over the protocol so it
-\ works for any input/output stream you define later.
+\ Two things live here:
+\   * `string` — a text value type (a darray of character codes) with
+\     proper methods: show / size / at / equals?, plus string-append
+\     and friends.  Our `CLASS: string` lives in the scratchpad vocab
+\     and coexists with Factor's native builtin `string` (we never
+\     name that builtin class, so shadowing it in scratchpad is inert).
+\   * the STREAM protocol, whose signature idea is that end-of-file is
+\     an OBJECT (<eof>), not a flag — read-char returns a char code or
+\     the marker, and the read loop dispatches on that.  copy-stream is
+\     written ONCE over the protocol and works for any stream.
 \
-\ Builds on Layer 0 (equals?) and Layer 1 (darray as the buffer).
+\ Builds on Layer 0 (show / equals?) and Layer 1 (darray, size, at).
 \ See docs/coreprotocols.md (Layer 3) for the design.
-
-\ ── <eof> — the end-of-stream marker ─────────────────────────────
 \
-\ An empty class.  We never need a privileged singleton: Layer 0's
-\ equals? is structural, so any two eof-marker instances compare
-\ equal, and a char (a fixnum) never equals one.  `eof` mints a
-\ marker; `eof?` asks "is this the end?".
-CLASS: eof-marker ;
-: eof  ( -- m )    <eof-marker> ;
-: eof? ( x -- ? )  <eof-marker> equals? ;
+\ NB for lib authors: our compiler emits METHOD bodies BEFORE the
+\ file's `:` colon words, so a method may call words from earlier-
+\ loaded files (core, collections) and builtins, but NOT a `:` helper
+\ defined later in THIS file — that is an unresolved forward reference
+\ at load.  Hence read-char inlines its end test rather than calling a
+\ helper.
 
-\ ── the STREAM protocol ──────────────────────────────────────────
-\
-\ read-char pulls one character code off an input stream, or returns
-\ <eof> when drained.  write-char pushes one onto an output stream.
+\ ── classes ──────────────────────────────────────────────────────
+CLASS: eof-marker ;                       \ the end-of-stream marker
+CLASS: string SLOT: chars ;               \ a string: darray of char codes
+CLASS: string-reader SLOT: buf SLOT: pos ;
+CLASS: string-writer SLOT: buf ;
+
+\ ── the STREAM protocol (new generics) ───────────────────────────
 GENERIC: read-char  ( s -- ch|eof )
 GENERIC: write-char ( ch s -- )
 
-\ ── string-reader — reads codes out of a buffer, then <eof> ───────
-CLASS: string-reader SLOT: buf SLOT: pos ;
+\ ── methods ──────────────────────────────────────────────────────
+\
+\ string joins the collection protocol (size / at) and the core
+\ protocol (show).  Equality falls through to Layer 0's structural
+\ default, which compares the char buffers element-wise.
+METHOD: size ( s:string -- n )      string>chars size ;
+METHOD: at   ( i s:string -- ch )   string>chars at ;
+METHOD: show ( s:string -- )
+    string>chars dup size 0 ?DO
+        dup I swap at emit
+    LOOP drop ;
 
-\ A reader over a darray of character codes, starting at index 0.
-: <reader> ( buf -- s )  0 <string-reader> ;
-
-\ Note: our compiler emits METHOD bodies BEFORE the file's `:` colon
-\ words, so a method may call words from earlier-loaded files (core,
-\ collections) but NOT a `:` helper defined later in THIS file — that
-\ would be an unresolved forward reference at load.  So read-char
-\ inlines its end-of-buffer test and its <eof> construction rather
-\ than calling reader-done? / eof.
 METHOD: read-char ( s:string-reader -- ch|eof )
     \ done?  pos >= size
     dup string-reader>pos over string-reader>buf size < 0= IF
         drop <eof-marker>
     ELSE
-        \ fetch buf[pos]
+        \ ch := buf[pos]
         dup string-reader>pos over string-reader>buf at   ( s ch )
-        \ advance pos := pos + 1
+        \ pos := pos + 1
         swap dup string-reader>pos 1+ over string-reader.pos!  ( ch s )
         drop
     THEN ;
 
-\ Public convenience (same predicate, callable from user `:` words).
-: reader-done? ( s -- ? )
-    dup string-reader>pos
-    swap string-reader>buf size
-    < 0= ;
-
-\ ── string-writer — accumulates codes into a darray ──────────────
-CLASS: string-writer SLOT: buf ;
-
-: <writer> ( -- w )  new-darray <string-writer> ;
-
 METHOD: write-char ( ch w:string-writer -- )
     string-writer>buf d-push ;
 
-\ Print a writer's accumulated characters (the toy's "show").
-: writer-emit ( w -- )
-    string-writer>buf dup size 0 DO
-        dup I swap at emit
-    LOOP drop ;
+\ ── <eof> helpers ────────────────────────────────────────────────
+: eof  ( -- m )    <eof-marker> ;
+: eof? ( x -- ? )  <eof-marker> equals? ;
 
-\ ── building / draining ──────────────────────────────────────────
+\ ── string construction & ops ────────────────────────────────────
+: new-string ( -- s )   new-darray <string> ;
 
-\ Turn an ANS string into a string-reader (copies the bytes into a
-\ darray buffer).
-\ NB: an ANS c-addr here is an nf-addr object, so plain `+` (integer
-\ math) can't offset it — walk it one char at a time with `char+`.
-: str>reader ( c-addr u -- s )
-    swap new-darray rot             ( c-addr d u )
-    0 DO                            ( c-addr d )
-        over c@ over d-push         ( push c-addr[i] )
-        swap char+ swap             ( advance the pointer )
-    LOOP
-    nip <reader> ;
+\ Build a string from an ANS string literal.  An ANS c-addr is an
+\ nf-addr object, so we can't offset it with integer `+` — walk it one
+\ character at a time with char+.
+: >string ( c-addr u -- s )
+    swap new-darray rot 0 DO
+        over c@ over d-push
+        swap char+ swap
+    LOOP nip <string> ;
 
-\ ── derived protocol words (write ONCE, work for any streams) ─────
+: string-push ( ch s -- )   string>chars d-push ;
 
-\ Pump every character from `in` to `out` until <eof>.  The loop is
-\ the method table: read-char tells us "char or end" by what it
-\ returns, no flag.
-\ Each iteration consumes the char on BOTH paths, so the loop body is
-\ stack-balanced (Factor's compiler checks branch parity strictly).
+\ Append every character of src onto dst (in place).
+: append-into ( src dst -- )
+    over size 0 ?DO
+        over I swap at
+        over string-push
+    LOOP 2drop ;
+
+\ Concatenate two strings into a fresh one.
+: string-append ( a b -- c )
+    new-string >r
+    swap r@ append-into
+    r@ append-into
+    r> ;
+
+\ ── streams ──────────────────────────────────────────────────────
+: <reader> ( buf -- s )  0 <string-reader> ;
+: <writer> ( -- w )      new-darray <string-writer> ;
+
+\ Public convenience (the same end test read-char inlines).
+: reader-done? ( s -- ? )
+    dup string-reader>pos swap string-reader>buf size < 0= ;
+
+\ interop: string <-> streams
+: string>reader ( s -- r )   string>chars <reader> ;
+: writer>string ( w -- s )   string-writer>buf <string> ;
+
+\ A reader straight from an ANS literal, and printing a writer.
+: str>reader ( c-addr u -- r )  >string string>reader ;
+: writer-emit ( w -- )          writer>string show ;
+
+\ ── derived protocol words (write ONCE, work for any stream) ──────
+\
+\ Pump every character from `in` to `out` until <eof>.  Each iteration
+\ consumes the char on BOTH branches so the loop body is stack-balanced
+\ (the compiler checks branch parity strictly).
 : copy-stream ( in out -- )
     BEGIN
-        over read-char              ( in out ch )
+        over read-char
         dup eof? IF
-            drop -1                 ( done: in out -1 )
+            drop -1
         ELSE
-            over write-char  0      ( wrote it: in out 0 )
+            over write-char 0
         THEN
     UNTIL
     2drop ;
 
 \ Drain an input stream into a fresh writer and return it.
-: read-all ( in -- w )
-    <writer> dup >r copy-stream r> ;
+: read-all ( in -- w )  <writer> dup >r copy-stream r> ;
