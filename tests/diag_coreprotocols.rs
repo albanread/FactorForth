@@ -132,6 +132,63 @@ fn equals_override_drives_member_search() {
     assert!(cap.contains("in2=0"), "member? absent by id: {cap}");
 }
 
+/// `clone` (Layer 0) gives an independent copy.  The default is shallow,
+/// but grid/darray override it to copy their backing — so mutating a
+/// clone never touches the original.
+#[test]
+#[ignore]
+fn clone_is_independent_for_collections() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        \ grid: clone, then mutate the copy — original must not change
+        2 2 new-grid VALUE g
+        5  0 0 g at-xy!
+        g clone VALUE g2
+        99 0 0 g2 at-xy!            \ scribble on the copy
+        ." g="  0 0 g  at-xy .      \ 5  (original untouched)
+        ." g2=" 0 0 g2 at-xy .      \ 99 (copy changed)
+
+        \ darray: clone, push to the copy — original size unchanged
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push
+        xs clone VALUE ys
+        3 ys d-push                 \ grow only the copy
+        ." xn=" xs size .           \ 2
+        ." yn=" ys size .           \ 3
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("g=5"), "original grid cell unchanged: {cap}");
+    assert!(cap.contains("g2=99"), "cloned grid cell changed: {cap}");
+    assert!(cap.contains("xn=2"), "original darray length unchanged: {cap}");
+    assert!(cap.contains("yn=3"), "cloned darray grew independently: {cap}");
+}
+
+/// `clone`'s default copies a value-like class's slots, and numbers
+/// clone to an equal value.
+#[test]
+#[ignore]
+fn clone_default_copies_slots() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, r#"
+        CLASS: point SLOT: x SLOT: y ;
+        3 4 <point> VALUE p
+        p clone VALUE q
+        \ the copy reads the same slot values
+        ." qx=" q point>x .         \ 3
+        ." qy=" q point>y .         \ 4
+        \ numbers clone to an equal value
+        ." n=" 42 clone .           \ 42
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("qx=3") && cap.contains("qy=4"), "clone copies slots: {cap}");
+    assert!(cap.contains("n=42"), "number clones to equal value: {cap}");
+}
+
 // ── Layer 1: grid ───────────────────────────────────────────────
 
 /// A grid stores and retrieves cells by (x, y), 0-based.  Write a

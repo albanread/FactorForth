@@ -49,3 +49,18 @@ METHOD: show ( x:object -- )
 GENERIC: equals? ( a b -- ? )
 
 METHOD: equals? ( a b:object -- ? )  = ;
+
+\ ── clone ─────────────────────────────────────────────────────────
+\
+\ `clone ( x -- copy )` returns an independent copy of x.  The default
+\ is a SHALLOW structural copy: it duplicates x's immediate slots, but
+\ a slot that holds another object still points at the same object.
+\ That's the right default for value-like classes (a point, a colour).
+\
+\ A class that OWNS a mutable backing store must override clone to copy
+\ that store too, or the "copy" will share state with the original —
+\ which is exactly why grid and darray (Layer 1) provide their own
+\ clone methods.  Numbers and strings clone to an equal value.
+GENERIC: clone ( x -- copy )
+
+METHOD: clone ( x:object -- copy )  (clone) ;

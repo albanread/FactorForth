@@ -302,6 +302,24 @@ new-darray VALUE xs
 > — and every value search here follows suit. See
 > [Classes and methods](classes.md).
 
+### clone — independent copies
+
+`clone ( x -- copy )` is Layer 0's copy protocol. Its default is a
+*shallow* copy (it duplicates a class's immediate slots). A collection
+owns a mutable backing store, so a shallow copy would share it — which
+is why `grid` and `darray` override `clone` to copy the backing too.
+The result is fully independent: mutating a clone never touches the
+original.
+
+```forth
+2 2 new-grid VALUE g
+5  0 0 g at-xy!
+g clone VALUE g2
+99 0 0 g2 at-xy!         \ scribble on the copy
+0 0 g  at-xy .           \ 5   (original untouched)
+0 0 g2 at-xy .           \ 99
+```
+
 ---
 
 ## Extending the protocol
@@ -316,11 +334,16 @@ METHOD: size     ( c:ring -- n )    ... ;
 METHOD: at       ( i c:ring -- x )  ... ;
 METHOD: at!      ( x i c:ring -- )  ... ;
 METHOD: new-like ( c:ring -- d )    ... ;   \ a fresh, empty ring
+METHOD: clone    ( c:ring -- copy ) ... ;   \ copy the backing (see below)
 
 \ now this just works:
 my-ring ' dbl map
 my-ring 0 ' + fold
 ```
+
+If your class owns a mutable backing store, override `clone` too — the
+default is shallow and would share that store. `(clone)` deep-copies a
+Factor array or vector, so a one-liner over the backing usually does it.
 
 > **Implementation note.** A `METHOD:` body is emitted before plain `:`
 > definitions in the same compile, so a method must not call a `:` word

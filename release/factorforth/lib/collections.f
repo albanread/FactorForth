@@ -95,6 +95,18 @@ METHOD: new-like ( g:grid -- d )
 METHOD: new-like ( d:darray -- e )
     drop <rawvec> <darray> ;
 
+\ `clone` (Layer 0's copy protocol) — a collection owns a mutable
+\ backing store, so the default shallow clone would share it.  These
+\ methods rebuild the tuple around a COPIED store, so the copy is fully
+\ independent: mutating one never touches the other.  `(clone)` deep-
+\ copies the Factor backing (array / vector elements and all).
+METHOD: clone ( g:grid -- copy )
+    dup grid>w over grid>h          \ g w h
+    rot grid>cells (clone)          \ w h cells'
+    <grid> ;
+METHOD: clone ( d:darray -- copy )
+    darray>data (clone) <darray> ;
+
 \ ── Algorithms over the protocol ─────────────────────────────────
 \
 \ Written ONCE against size/at — they work on any collection that
