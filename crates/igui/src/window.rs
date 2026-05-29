@@ -197,78 +197,49 @@ pub(crate) fn demo_files_snapshot() -> Vec<(u16, String, std::path::PathBuf)> {
 
 // ── Help / documentation launcher ─────────────────────────────────────────
 
-/// Locate `doc-crate.exe` and the bundled `docs/` directory, then
-/// spawn the documentation browser.
+/// Help → Documentation: open the manual **in-window** as a doc-pane,
+/// rendering through the shared `docpane` core (the same renderer the
+/// standalone `doc-crate.exe` test harness uses).  On demand only — we
+/// don't auto-show it.  We're already on the GUI thread here (called
+/// from the frame's WM_COMMAND), so we create the child directly rather
+/// than marshaling through `open_doc_child`.
 ///
-/// Search order for each asset:
-///
-/// **doc-crate.exe**
-///   1. `<exe_dir>/doc-crate.exe`  — production installation
-///   2. `DOC_CRATE_EXE` env var   — developer override
-///
-/// **docs/**
-///   1. `<exe_dir>/docs/`         — production installation
-///   2. `<exe_dir>/../../docs/`   — dev build (exe is under target/debug/)
-///   3. `CARGO_MANIFEST_DIR/docs/` — `cargo run` from anywhere
+/// Manual-page search order:
+///   1. `<exe_dir>/docs/coreprotocols.md`           — production install
+///   2. `CARGO_MANIFEST_DIR/release/factorforth/docs/coreprotocols.md` — dev
 pub(crate) fn open_docs() {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let exe_doc = std::env::current_exe().ok().and_then(|p| {
+        p.parent().map(|d| d.join("docs").join("coreprotocols.md"))
+    });
+    // CARGO_MANIFEST_DIR here is crates/igui; the release docs live two
+    // levels up at <repo>/release/factorforth/docs.
+    let dev_doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .map(|root| root.join("release/factorforth/docs/coreprotocols.md"));
 
-    // ── locate doc-crate.exe ──────────────────────────────────────
-    let doc_exe: Option<std::path::PathBuf> = exe_dir
-        .as_ref()
-        .map(|d| d.join("doc-crate.exe"))
+    let path = exe_doc
         .filter(|p| p.is_file())
-        .or_else(|| {
-            std::env::var("DOC_CRATE_EXE")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .filter(|p| p.is_file())
-        });
+        .or_else(|| dev_doc.filter(|p| p.is_file()));
 
-    let Some(doc_exe) = doc_exe else {
-        eprintln!(
-            "[docs] doc-crate.exe not found next to this executable.\n\
-             Copy doc-crate.exe alongside wf64-ui.exe, or set DOC_CRATE_EXE."
-        );
+    let Some(path) = path else {
+        eprintln!("[docs] manual page not found (looked next to the exe and in the source tree)");
         return;
     };
-
-    // ── locate docs/ directory ────────────────────────────────────
-    let docs_dir: Option<std::path::PathBuf> = exe_dir
-        .as_ref()
-        .map(|d| d.join("docs"))
-        .filter(|p| p.is_dir())
-        .or_else(|| {
-            // dev: exe is in target/debug/ or target/release/
-            exe_dir.as_ref()
-                .and_then(|d| d.ancestors().nth(2))
-                .map(|root| root.join("docs"))
-                .filter(|p| p.is_dir())
-        })
-        .or_else(|| {
-            // cargo run from any directory
-            let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let p = manifest.join("docs");
-            p.is_dir().then_some(p)
-        });
-
-    let Some(docs_dir) = docs_dir else {
-        eprintln!(
-            "[docs] docs/ directory not found next to this executable.\n\
-             Expected a docs/ folder alongside wf64-ui.exe."
-        );
-        return;
+    let md = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[docs] read {}: {e}", path.display());
+            return;
+        }
     };
 
-    // ── spawn ─────────────────────────────────────────────────────
-    if let Err(e) = std::process::Command::new(&doc_exe)
-        .arg(&docs_dir)
-        .spawn()
-    {
-        eprintln!("[docs] failed to launch {}: {e}", doc_exe.display());
-    }
+    let Some(mdi) = mdi_client_hwnd() else {
+        eprintln!("[docs] MDI client not available");
+        return;
+    };
+    let title: Vec<u16> = "Manual\u{0}".encode_utf16().collect();
+    super::doc_pane::create_on_gui_thread(mdi, &title, &md);
 }
 
 /// Scan for `demos/*.f` files and return `(menu_id, display_name, path)`

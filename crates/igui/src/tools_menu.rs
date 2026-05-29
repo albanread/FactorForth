@@ -48,7 +48,8 @@ pub const FORTH_INTERRUPT_CMD_ID: u16 = 0x3201;
 pub const DEMO_CMD_BASE: u16 = 0x4000;
 pub const DEMO_CMD_END:  u16 = 0x4FFF;
 
-/// Help → Documentation: spawn doc-crate.exe against the bundled docs/.
+/// Help → Documentation: open the manual in-window as a doc-pane
+/// (rendered by the shared docpane core).  Frame-handled, on demand.
 pub const HELP_CMD_DOCS: u16 = 0x5000;
 
 // ─── Menu builders ────────────────────────────────────────────────────
@@ -176,7 +177,7 @@ pub fn append_forth_menu(bar: HMENU) {
     append_popup(bar, "forth-menu", "Fo&rth", popup);
 }
 
-/// Help menu — Documentation (opens doc-crate.exe against docs/).
+/// Help menu — Documentation (opens the manual in-window as a doc-pane).
 pub fn append_help_menu(bar: HMENU) {
     let Ok(popup) = (unsafe { CreatePopupMenu() }) else {
         eprintln!("[help-menu] CreatePopupMenu failed");
