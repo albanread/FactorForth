@@ -2,9 +2,12 @@
 
 Every Forth word has a **stack effect** — what it pops and what
 it pushes.  Reading and writing effects is the single most
-useful Forth skill.  Factor4th's compiler checks effects at
-compile time, so getting them wrong is a compile error, not a
-runtime mystery.
+useful Forth skill.  Factor4th infers every word's effect at
+compile time: a `( … )` comment that disagrees with the code is
+reported as a **warning** (the compile proceeds, using the real
+inferred effect), while a body whose branches can't be balanced
+is rejected outright before it runs.  Either way you hear about
+it at compile time, not as a runtime mystery.
 
 ## Notation
 
@@ -53,9 +56,11 @@ When you define a word, write the effect right after the name:
 : shout ( c-addr u -- )  type ." !" cr ;
 ```
 
-The compiler doesn't *check* that the comment matches — it
-verifies the actual code matches.  But humans rely on the
-comment, so keep it honest.
+The compiler infers the effect from the **code** and compares it
+to your comment; if they disagree it warns, then emits the real
+(inferred) effect anyway.  The comment is documentation — keep it
+honest, because humans rely on it even though the compiler trusts
+the code.
 
 ## Conditional effects
 
