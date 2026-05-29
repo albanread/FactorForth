@@ -26,3 +26,26 @@ pub mod parser;
 pub mod layout;
 pub mod theme;
 pub mod mermaid;
+pub mod render;
+
+#[cfg(test)]
+mod tests {
+    // A stub measure (no DirectWrite) — the layout pipeline is pure, so
+    // this exercises parse → layout without a window or render target.
+    fn approx(text: &str, _font: &str, size: f32, _bold: bool, _italic: bool) -> f32 {
+        text.chars().count() as f32 * size * 0.5
+    }
+
+    #[test]
+    fn parse_then_layout_produces_commands() {
+        let md = "# Title\n\nSome **bold** text and `code`.\n\n- one\n- two\n";
+        let blocks = crate::parser::parse(md);
+        assert!(!blocks.is_empty(), "parser produced blocks");
+        let ly = crate::layout::layout(&blocks, 0.0, 600.0, 0.0, approx);
+        assert!(!ly.cmds.is_empty(), "layout produced draw commands");
+        assert!(ly.total_h > 0.0, "layout has positive height");
+        // The heading text should surface as a recorded heading.
+        assert!(ly.headings.iter().any(|(h, _)| h.contains("Title")),
+            "heading recorded: {:?}", ly.headings);
+    }
+}
