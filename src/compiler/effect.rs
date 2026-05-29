@@ -388,6 +388,11 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("hs-len",      e(1, 1)); // s -- n
     m.insert("hs-members",  e(1, 1)); // s -- vec
 
+    // Doc-pane (forth.wf64-gfx): Forth-writable Markdown window.
+    m.insert("doc-open",    e(2, 1)); // c-addr u -- id
+    m.insert("doc-set",     e(3, 0)); // c-addr u id --
+    m.insert("doc-append",  e(3, 0)); // c-addr u id --
+
     m
 }
 

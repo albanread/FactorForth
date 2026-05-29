@@ -467,6 +467,12 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("gpane-fill-circle", QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-fill-circle" }),
         ("gpane-next-event",  QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "gpane-next-event" }),
 
+        // Doc-pane: a Forth-writable Markdown document window, backed
+        // by the rt_doc_* FFI exports (igui::doc_pane).
+        ("doc-open",          QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "doc-open" }),
+        ("doc-set",           QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "doc-set" }),
+        ("doc-append",        QualifiedBuiltin { vocab: "forth.wf64-gfx", factor_name: "doc-append" }),
+
         // Event-kind constants returned by gpane-next-event.
         // Factor side has them as EV_NONE etc.; ANS-side spelling
         // is the conventional lowercase-hyphen form.

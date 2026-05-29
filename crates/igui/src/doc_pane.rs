@@ -1,21 +1,29 @@
-//! doc_pane — an MDI child that browses a folder of Markdown documents,
-//! with the DocCrate-style sidebar: a list of pages on the left, the
-//! current page on the right, a draggable divider to resize the sidebar,
-//! and a ‹/› toggle (with a reveal tab) to collapse and restore it.
-//! Click a sidebar row or an in-page link to navigate; wheel to scroll.
+//! doc_pane — a generic, Forth-writable Markdown pane.
 //!
-//! The render core renders one document from text; this host owns the
-//! browser chrome — folder scan, the row sidebar, navigation — drawn
-//! with `docpane::render`'s `fill_rect` / `draw_text` primitives plus
-//! `draw_document` for the page body.
+//! Where `help_pane` is the read-only documentation *browser* (folder
+//! scan + sidebar + link navigation), this is its plain sibling: a
+//! single document with no chrome, whose Markdown source a Forth
+//! program supplies and updates at will.  Think of it as a `text_view`
+//! that renders Markdown instead of a character grid — same
+//! command-channel threading model:
 //!
-//! Factory note: the pane's render target comes from *docpane's* D2D
-//! factory (`render::factory()`), so Mermaid geometry and the target
-//! share one factory.
+//!   - Each pane owns a per-pane `PaneState` holding the current
+//!     Markdown `source` and a `gen` counter that bumps on every edit.
+//!   - The language thread calls `set_markdown` / `append_markdown`
+//!     (never touches an HWND), then asks the GUI thread to repaint via
+//!     `window::post_doc_flush(child_id)` → `WM_IGUI_DOC_FLUSH`.
+//!   - The frame WndProc routes that to `flush_on_gui_thread`, which
+//!     just `InvalidateRect`s the child.  WM_PAINT re-parses + re-lays
+//!     out from the source whenever the `gen` it last drew is stale.
+//!
+//! Rendering goes through the shared `docpane` core, so the pane's
+//! render target comes from *docpane's* D2D factory (`render::factory()`)
+//! — Mermaid geometry and the target then share one factory.
 
 #![cfg(windows)]
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -31,13 +39,11 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefMDIChildProcW, GetClientRect, GetWindowLongPtrW, LoadCursorW, RegisterClassExW, SendMessageW,
-    SetCursor, SetWindowLongPtrW, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDC_HAND,
-    IDC_SIZEWE, MDICREATESTRUCTW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDICREATE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE, WNDCLASSEXW, WNDCLASS_STYLES,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    SetWindowLongPtrW, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, MDICREATESTRUCTW,
+    WM_LBUTTONDOWN, WM_MDICREATE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SIZE,
+    WNDCLASSEXW, WNDCLASS_STYLES, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 use docpane::layout::Layout;
@@ -47,145 +53,121 @@ use super::{registry, window};
 
 const DOC_CLASS: PCWSTR = w!("Factor4thDocPane");
 const WHEEL_STEP: f32 = 48.0;
-// Sidebar chrome geometry (DIPs).
-const SB_MIN: f32 = 120.0; // min sidebar width when dragging
-const TAB_W: f32 = 16.0; // reveal-tab width when collapsed
-const BTN_W: f32 = 16.0; // toggle button
-const BTN_H: f32 = 24.0;
-const DIV_HIT: f32 = 5.0; // grab zone each side of the divider
 
-struct DocFile {
-    name: String,
-    path: PathBuf,
+// ─── Per-pane shared state (queue-of-one: the latest source) ─────────
+
+/// The Markdown a pane should render.  Mutated from the language thread
+/// (set/append), snapshotted on the GUI thread at paint time.  `gen`
+/// rises on every edit so the window knows when its cached layout is
+/// stale without diffing the (potentially large) source string.
+struct PaneState {
+    source: String,
+    gen: u64,
 }
 
-fn scan(dir: &Path) -> Vec<DocFile> {
-    let mut files: Vec<DocFile> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("md") {
-                let name = p
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("untitled")
-                    .to_string();
-                files.push(DocFile { name, path: p });
-            }
-        }
-    }
-    files.sort_by(|a, b| {
-        let ap = a.name.eq_ignore_ascii_case("index") || a.name.eq_ignore_ascii_case("readme");
-        let bp = b.name.eq_ignore_ascii_case("index") || b.name.eq_ignore_ascii_case("readme");
-        match (ap, bp) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
-    });
-    files
+static PANES: OnceLock<Mutex<HashMap<i64, Arc<Mutex<PaneState>>>>> = OnceLock::new();
+
+fn panes() -> &'static Mutex<HashMap<i64, Arc<Mutex<PaneState>>>> {
+    PANES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// `index` → "Index", `let-algebra` → "Let Algebra".
-fn pretty(name: &str) -> String {
-    name.replace(['-', '_'], " ")
-        .split_whitespace()
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn get_pane(child_id: i64) -> Option<Arc<Mutex<PaneState>>> {
+    panes().lock().ok()?.get(&child_id).cloned()
 }
 
-fn resolve_href(href: &str, current: &Path, docs_dir: &Path) -> Option<PathBuf> {
-    if href.starts_with("http://") || href.starts_with("https://") {
-        return None;
+fn install_pane(child_id: i64, pane: Arc<Mutex<PaneState>>) {
+    if let Ok(mut map) = panes().lock() {
+        map.insert(child_id, pane);
     }
-    let href = href.split('#').next().unwrap_or("");
-    if href.is_empty() {
-        return None;
-    }
-    let base = current.parent().unwrap_or(docs_dir);
-    let cand = base.join(href);
-    if cand.exists() {
-        return Some(cand);
-    }
-    let with = base.join(format!("{href}.md"));
-    if with.exists() {
-        return Some(with);
-    }
-    None
 }
 
-fn same_file(a: &Path, b: &Path) -> bool {
-    a == b
-        || matches!(
-            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
-            (Ok(x), Ok(y)) if x == y
-        )
+fn forget_pane(child_id: i64) {
+    if let Ok(mut map) = panes().lock() {
+        map.remove(&child_id);
+    }
+}
+
+// ─── Language-thread API ─────────────────────────────────────────────
+//
+// All three look up the pane, edit the source under the lock, bump the
+// generation, then post a repaint.  They never see an HWND.
+
+/// Replace the pane's Markdown with `md`.  Returns false if there's no
+/// such pane (closed, or never opened).
+pub fn set_markdown(child_id: i64, md: &str) -> bool {
+    let Some(pane) = get_pane(child_id) else {
+        return false;
+    };
+    if let Ok(mut s) = pane.lock() {
+        s.source.clear();
+        s.source.push_str(md);
+        s.gen = s.gen.wrapping_add(1);
+    } else {
+        return false;
+    }
+    window::post_doc_flush(child_id);
+    true
+}
+
+/// Append `md` to the pane's existing Markdown (e.g. streaming a log).
+pub fn append_markdown(child_id: i64, md: &str) -> bool {
+    let Some(pane) = get_pane(child_id) else {
+        return false;
+    };
+    if let Ok(mut s) = pane.lock() {
+        s.source.push_str(md);
+        s.gen = s.gen.wrapping_add(1);
+    } else {
+        return false;
+    }
+    window::post_doc_flush(child_id);
+    true
+}
+
+// ─── GUI-thread flush ────────────────────────────────────────────────
+
+/// Called from `frame_wnd_proc` on the GUI thread when a
+/// `WM_IGUI_DOC_FLUSH` arrives.  The source already lives in the shared
+/// `PaneState`; all we do here is invalidate so WM_PAINT re-reads it.
+pub(super) fn flush_on_gui_thread(child_id: i64) {
+    if let Some(hwnd) = registry::mdi_hwnd_of(child_id) {
+        let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+    }
 }
 
 // ─── Per-window state ────────────────────────────────────────────────
+
 struct DocWindowState {
     hwnd: HWND,
     child_id: i64,
     target: Option<ID2D1HwndRenderTarget>,
-    docs_dir: PathBuf,
-    files: Vec<DocFile>,
-    current: usize,
+    pane: Arc<Mutex<PaneState>>,
     content: Option<Layout>,
     /// (x_base, width) the content was laid out at — relayout on change.
     laid_out: (f32, f32),
+    /// The `PaneState.gen` the current layout was built from.
+    laid_gen: u64,
     scroll_y: f32,
     max_scroll: f32,
-    // Sidebar chrome
-    sidebar_w: f32,
-    sidebar_saved: f32,
-    dragging_div: bool,
-    hover_sidebar: Option<usize>,
-    hover_toggle: bool,
     client_w: u32,
     client_h: u32,
     dpi: u32,
 }
 
 impl DocWindowState {
-    fn new(hwnd: HWND, child_id: i64, path: &str) -> Self {
-        let p = PathBuf::from(path);
-        let (docs_dir, initial) = if p.is_dir() {
-            (p.clone(), None)
-        } else {
-            (
-                p.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")),
-                Some(p.clone()),
-            )
-        };
-        let files = scan(&docs_dir);
-        let current = initial
-            .and_then(|ip| files.iter().position(|f| same_file(&f.path, &ip)))
-            .unwrap_or(0);
+    fn new(hwnd: HWND, child_id: i64, pane: Arc<Mutex<PaneState>>) -> Self {
         let dpi = unsafe { GetDpiForWindow(hwnd) };
         let dpi = if dpi == 0 { 96 } else { dpi };
         Self {
             hwnd,
             child_id,
             target: None,
-            docs_dir,
-            files,
-            current,
+            pane,
             content: None,
             laid_out: (-1.0, -1.0),
+            laid_gen: u64::MAX,
             scroll_y: 0.0,
             max_scroll: 0.0,
-            sidebar_w: theme::SIDEBAR_W,
-            sidebar_saved: theme::SIDEBAR_W,
-            dragging_div: false,
-            hover_sidebar: None,
-            hover_toggle: false,
             client_w: 0,
             client_h: 0,
             dpi,
@@ -201,86 +183,6 @@ impl DocWindowState {
     }
     fn invalidate(&self) {
         let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
-    }
-    fn hidden(&self) -> bool {
-        self.sidebar_w < 1.0
-    }
-    fn current_path(&self) -> Option<PathBuf> {
-        self.files.get(self.current).map(|f| f.path.clone())
-    }
-
-    /// Left edge of the content area (DIPs) — past the sidebar, or past
-    /// the reveal tab when collapsed.
-    fn content_x(&self) -> f32 {
-        (if self.hidden() { TAB_W } else { self.sidebar_w + 1.0 }) + theme::H_PAD
-    }
-
-    fn toggle_btn_rect(&self, vh: f32) -> (f32, f32, f32, f32) {
-        let by = (vh / 2.0 - BTN_H / 2.0).round();
-        if self.hidden() {
-            (0.0, by, TAB_W, BTN_H)
-        } else {
-            (self.sidebar_w - BTN_W / 2.0, by, BTN_W, BTN_H)
-        }
-    }
-    fn on_toggle_btn(&self, x: f32, y: f32, vh: f32) -> bool {
-        let (bx, by, bw, bh) = self.toggle_btn_rect(vh);
-        x >= bx && x <= bx + bw && y >= by && y <= by + bh
-    }
-    fn on_divider(&self, x: f32) -> bool {
-        !self.hidden() && (x - self.sidebar_w).abs() < DIV_HIT
-    }
-    fn hit_sidebar_row(&self, x: f32, y: f32) -> Option<usize> {
-        if self.hidden() || x >= self.sidebar_w {
-            return None;
-        }
-        let i = (y - 36.0) / theme::SIDEBAR_ITEM_H;
-        if i < 0.0 {
-            return None;
-        }
-        let i = i as usize;
-        (i < self.files.len()).then_some(i)
-    }
-    fn hit_link(&self, x: f32, y: f32) -> Option<String> {
-        let c = self.content.as_ref()?;
-        let dy = y + self.scroll_y;
-        c.hits
-            .iter()
-            .find(|h| x >= h.x0 && x <= h.x1 && dy >= h.y0 && dy <= h.y1)
-            .map(|h| h.href.clone())
-    }
-
-    fn toggle_sidebar(&mut self) {
-        if self.hidden() {
-            self.sidebar_w = if self.sidebar_saved >= SB_MIN {
-                self.sidebar_saved
-            } else {
-                theme::SIDEBAR_W
-            };
-        } else {
-            self.sidebar_saved = self.sidebar_w;
-            self.sidebar_w = 0.0;
-        }
-        self.content = None; // content width changed
-        self.invalidate();
-    }
-
-    fn navigate(&mut self, idx: usize) {
-        if idx >= self.files.len() || idx == self.current {
-            return;
-        }
-        self.current = idx;
-        self.scroll_y = 0.0;
-        self.content = None;
-        self.invalidate();
-    }
-    fn nav_href(&mut self, href: &str) {
-        let cur = self.current_path().unwrap_or_else(|| self.docs_dir.clone());
-        if let Some(p) = resolve_href(href, &cur, &self.docs_dir) {
-            if let Some(idx) = self.files.iter().position(|f| same_file(&f.path, &p)) {
-                self.navigate(idx);
-            }
-        }
     }
 
     fn ensure_target(&mut self, w: u32, h: u32) {
@@ -319,17 +221,28 @@ impl DocWindowState {
     }
 
     fn relayout(&mut self, x_base: f32, width: f32, viewport_h: f32) {
-        if self.content.is_none() || (self.laid_out.0 - x_base).abs() > 0.5
-            || (self.laid_out.1 - width).abs() > 0.5
-        {
+        let gen = self.pane.lock().map(|s| s.gen).unwrap_or(0);
+        let stale = self.content.is_none()
+            || gen != self.laid_gen
+            || (self.laid_out.0 - x_base).abs() > 0.5
+            || (self.laid_out.1 - width).abs() > 0.5;
+        if stale {
             let md = self
-                .current_path()
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .unwrap_or_else(|| "# (no document)\n".to_string());
+                .pane
+                .lock()
+                .ok()
+                .map(|s| s.source.clone())
+                .unwrap_or_default();
+            let md = if md.trim().is_empty() {
+                "# (empty)\n\nThis pane has no content yet.\n".to_string()
+            } else {
+                md
+            };
             let blocks = parser::parse(&md);
             self.content =
                 Some(dlayout::layout(&blocks, x_base, width, 0.0, render::measure_text));
             self.laid_out = (x_base, width);
+            self.laid_gen = gen;
         }
         let total = self.content.as_ref().map(|l| l.total_h).unwrap_or(0.0);
         self.max_scroll = (total - viewport_h).max(0.0);
@@ -346,44 +259,13 @@ impl DocWindowState {
         }
     }
 
-    unsafe fn draw_sidebar(&self, t: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget, vh: f32) {
-        let sw = self.sidebar_w;
-        render::fill_rect(t, 0.0, 0.0, sw, vh, theme::SIDEBAR_BG);
-        // "DOCS" header
-        render::draw_text(
-            t, 14.0, 13.0, sw - 18.0, 16.0, "DOCS", theme::BODY_FONT, 10.5, true, false,
-            theme::TEXT_DIM, false,
-        );
-        for (i, f) in self.files.iter().enumerate() {
-            let y = 36.0 + i as f32 * theme::SIDEBAR_ITEM_H;
-            let sel = i == self.current;
-            let hov = self.hover_sidebar == Some(i);
-            if sel {
-                render::fill_rect(t, 0.0, y, sw - 1.0, theme::SIDEBAR_ITEM_H, theme::SIDEBAR_SEL);
-                render::fill_rect(t, 0.0, y, 2.0, theme::SIDEBAR_ITEM_H, theme::LINK);
-            } else if hov {
-                render::fill_rect(t, 0.0, y, sw - 1.0, theme::SIDEBAR_ITEM_H, theme::SIDEBAR_HVR);
-            }
-            let col = if sel { theme::TEXT_BRIGHT } else { theme::TEXT };
-            render::draw_text(
-                t, 14.0, y + 5.0, sw - 24.0, theme::SIDEBAR_ITEM_H, &pretty(&f.name),
-                theme::BODY_FONT, theme::SIDEBAR_FONT_SIZE, sel, false, col, false,
-            );
-        }
-        // Divider
-        render::fill_rect(t, sw - 1.0, 0.0, 1.5, vh, theme::BORDER);
-    }
-
-    unsafe fn draw_toggle(&self, t: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget, vh: f32) {
-        let (bx, by, bw, bh) = self.toggle_btn_rect(vh);
-        let (bg, fg) = if self.hover_toggle {
-            (theme::SIDEBAR_SEL, theme::TEXT_BRIGHT)
-        } else {
-            (theme::SIDEBAR_BG, theme::TEXT_DIM)
-        };
-        render::fill_rect(t, bx, by, bw, bh, bg);
-        let glyph = if self.hidden() { "\u{203A}" } else { "\u{2039}" }; // › ‹
-        render::draw_text(t, bx, by, bw, bh, glyph, theme::BODY_FONT, 12.0, true, false, fg, true);
+    fn hit_link(&self, x: f32, y: f32) -> Option<String> {
+        let c = self.content.as_ref()?;
+        let dy = y + self.scroll_y;
+        c.hits
+            .iter()
+            .find(|h| x >= h.x0 && x <= h.x1 && dy >= h.y0 && dy <= h.y1)
+            .map(|h| h.href.clone())
     }
 
     fn paint(&mut self) {
@@ -401,8 +283,8 @@ impl DocWindowState {
         self.ensure_target(w, h);
 
         let (vw, vh) = self.viewport();
-        let cx = self.content_x();
-        let cw = (vw - cx - theme::H_PAD).max(1.0);
+        let cx = theme::H_PAD;
+        let cw = (vw - 2.0 * theme::H_PAD).max(1.0);
         self.relayout(cx, cw, vh);
 
         let target = match self.target.clone() {
@@ -414,24 +296,16 @@ impl DocWindowState {
             let bg = theme::hex(theme::BG);
             target.Clear(Some(std::ptr::addr_of!(bg)));
             let base: &windows::Win32::Graphics::Direct2D::ID2D1RenderTarget = &target;
-
-            if self.hidden() {
-                // Reveal tab strip
-                render::fill_rect(base, 0.0, 0.0, TAB_W, vh, theme::SIDEBAR_BG);
-                render::fill_rect(base, TAB_W - 1.0, 0.0, 1.0, vh, theme::BORDER);
-            } else {
-                self.draw_sidebar(base, vh);
-            }
             if let Some(c) = self.content.as_ref() {
                 let _ = render::draw_document(base, c, self.scroll_y, vh);
             }
-            self.draw_toggle(base, vh);
             let _ = target.EndDraw(None, None);
         }
     }
 }
 
-// ─── Class registration ─────────────────────────────────────────────
+// ─── Class registration & open ───────────────────────────────────────
+
 pub fn register_class() -> Result<(), super::IGuiError> {
     if let Err(e) = render::init() {
         eprintln!("[doc-pane] render::init failed: {e}");
@@ -461,21 +335,33 @@ pub fn register_class() -> Result<(), super::IGuiError> {
 
 struct DocBootstrap {
     child_id: i64,
-    path: String,
+    pane: Arc<Mutex<PaneState>>,
 }
 
-/// Open a doc-pane.  `path` is a docs folder or a `.md` file.
-pub fn open(title: &str, path: &str) -> Option<i64> {
-    window::open_doc_child(title, path)
+/// Language-thread entry: open a new (empty) Markdown pane.  Returns the
+/// child id Forth uses with `set_markdown` / `append_markdown`.
+pub fn open(title: &str) -> Option<i64> {
+    window::open_doc_child(title)
 }
 
-pub(super) fn create_on_gui_thread(mdi: HWND, title_utf16: &[u16], path: &str) -> Option<i64> {
+pub(super) fn create_on_gui_thread(mdi: HWND, title_utf16: &[u16]) -> Option<i64> {
     let child_id = registry::allocate_child_id();
-    let bootstrap = Box::into_raw(Box::new(DocBootstrap { child_id, path: path.to_owned() }));
+    let pane = Arc::new(Mutex::new(PaneState {
+        source: String::new(),
+        gen: 0,
+    }));
+    install_pane(child_id, Arc::clone(&pane));
+
+    let bootstrap = Box::into_raw(Box::new(DocBootstrap {
+        child_id,
+        pane: Arc::clone(&pane),
+    }));
+
     let h_module = match unsafe { GetModuleHandleW(None) } {
         Ok(h) => HANDLE(h.0),
         Err(e) => {
             eprintln!("[doc-pane] GetModuleHandleW: {e}");
+            forget_pane(child_id);
             let _ = unsafe { Box::from_raw(bootstrap) };
             return None;
         }
@@ -496,13 +382,15 @@ pub(super) fn create_on_gui_thread(mdi: HWND, title_utf16: &[u16], path: &str) -
     };
     if result.0 == 0 {
         eprintln!("[doc-pane] WM_MDICREATE returned 0");
+        forget_pane(child_id);
         let _ = unsafe { Box::from_raw(bootstrap) };
         return None;
     }
     Some(child_id)
 }
 
-// ─── Window proc ────────────────────────────────────────────────────
+// ─── Window proc ─────────────────────────────────────────────────────
+
 unsafe extern "system" fn doc_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -521,7 +409,7 @@ unsafe extern "system" fn doc_wnd_proc(
         }
         let bootstrap = unsafe { Box::from_raw(bootstrap_ptr) };
         let child_id = bootstrap.child_id;
-        let win_state = Box::new(DocWindowState::new(hwnd, child_id, &bootstrap.path));
+        let win_state = Box::new(DocWindowState::new(hwnd, child_id, bootstrap.pane));
         let raw = Box::into_raw(win_state) as isize;
         unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw) };
         registry::register(child_id, hwnd, hwnd);
@@ -560,85 +448,22 @@ unsafe extern "system" fn doc_wnd_proc(
             state.scroll_by(-(delta / 120.0) * WHEEL_STEP);
             LRESULT(0)
         }
-        WM_MOUSEMOVE => {
-            let dx = (lparam.0 & 0xFFFF) as i16 as f32 * scale;
-            let dy = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 * scale;
-            let (vw, vh) = state.viewport();
-            if state.dragging_div {
-                state.sidebar_w = dx.clamp(SB_MIN, (vw - 160.0).max(SB_MIN));
-                state.content = None;
-                state.invalidate();
-                set_cursor(IDC_SIZEWE);
-                return LRESULT(0);
-            }
-            let prev_sb = state.hover_sidebar;
-            let prev_tg = state.hover_toggle;
-            state.hover_sidebar = state.hit_sidebar_row(dx, dy);
-            state.hover_toggle = state.on_toggle_btn(dx, dy, vh);
-            let cursor = if state.on_divider(dx) {
-                IDC_SIZEWE
-            } else if state.hover_toggle
-                || state.hover_sidebar.is_some()
-                || state.hit_link(dx, dy).is_some()
-            {
-                IDC_HAND
-            } else {
-                IDC_ARROW
-            };
-            set_cursor(cursor);
-            if state.hover_sidebar != prev_sb || state.hover_toggle != prev_tg {
-                state.invalidate();
-            }
-            LRESULT(0)
-        }
         WM_LBUTTONDOWN => {
+            // A generic Forth-fed pane has no folder context, so there's
+            // no link navigation here (that's `help_pane`'s job).  We
+            // still hit-test so a future revision can open external URLs.
             let dx = (lparam.0 & 0xFFFF) as i16 as f32 * scale;
             let dy = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 * scale;
-            let (_vw, vh) = state.viewport();
-            if state.hidden() {
-                if dx < TAB_W {
-                    state.toggle_sidebar();
-                    return LRESULT(0);
-                }
-            } else {
-                if state.on_toggle_btn(dx, dy, vh) {
-                    state.toggle_sidebar();
-                    return LRESULT(0);
-                }
-                if state.on_divider(dx) {
-                    state.dragging_div = true;
-                    let _ = unsafe { SetCapture(hwnd) };
-                    return LRESULT(0);
-                }
-                if let Some(idx) = state.hit_sidebar_row(dx, dy) {
-                    state.navigate(idx);
-                    return LRESULT(0);
-                }
-            }
-            if let Some(href) = state.hit_link(dx, dy) {
-                state.nav_href(&href);
-            }
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            if state.dragging_div {
-                state.dragging_div = false;
-                let _ = unsafe { ReleaseCapture() };
-            }
+            let _ = state.hit_link(dx, dy);
             LRESULT(0)
         }
         WM_NCDESTROY => {
             registry::unregister(state.child_id);
+            forget_pane(state.child_id);
             let _ = unsafe { Box::from_raw(state_ptr) };
             unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
             unsafe { DefMDIChildProcW(hwnd, msg, wparam, lparam) }
         }
         _ => unsafe { DefMDIChildProcW(hwnd, msg, wparam, lparam) },
-    }
-}
-
-fn set_cursor(id: PCWSTR) {
-    if let Ok(c) = unsafe { LoadCursorW(None, id) } {
-        unsafe { SetCursor(Some(c)) };
     }
 }

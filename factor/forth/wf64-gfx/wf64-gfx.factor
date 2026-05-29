@@ -185,6 +185,39 @@ FUNCTION: longlong rt_gpane_next_event_for ( longlong child_id,
     out-p1 longlong deref
     out-kind longlong deref ;
 
+! ─── 3b. Doc-pane (Forth-writable Markdown) ──────────────────────────
+!
+! A doc-pane renders a single Markdown document supplied from Forth.
+! `doc-open` returns a child_id; `doc-set` / `doc-append` feed it text.
+! Strings are nf-addr tuples — pass the `ba` slot as `void*`, same as
+! `gpane-open` (auto-pinned for the call, offset assumed 0).
+
+FUNCTION: longlong rt_doc_open ( void*    title_addr,
+                                 longlong title_len )
+
+FUNCTION: longlong rt_doc_set ( longlong child_id,
+                                void*    md_addr,
+                                longlong md_len )
+
+FUNCTION: longlong rt_doc_append ( longlong child_id,
+                                   void*    md_addr,
+                                   longlong md_len )
+
+! doc-open ( c-addr u -- child_id )
+:: doc-open ( c-addr u -- child_id )
+    c-addr ba>> u
+    rt_doc_open ;
+
+! doc-set ( c-addr u id -- )  — mirrors WRITE-FILE's handle-last shape
+:: doc-set ( c-addr u id -- )
+    id c-addr ba>> u
+    rt_doc_set drop ;
+
+! doc-append ( c-addr u id -- )
+:: doc-append ( c-addr u id -- )
+    id c-addr ba>> u
+    rt_doc_append drop ;
+
 ! ─── 4. Event-kind constants (mirror runtime.rs EV_*) ────────────────
 !
 ! These match the i64 tags in `wf64::runtime::EV_*`.  Forth user code

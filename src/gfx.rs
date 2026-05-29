@@ -162,6 +162,76 @@ pub extern "C" fn rt_gpane_fill_circle(cx: u64, cy: u64, r: u64, rgb: u64) -> u6
     0
 }
 
+// ─── Doc-pane FFI (Forth-writable Markdown) ──────────────────────────
+//
+// A doc-pane is the read-only `help_pane`'s plain sibling: a single
+// Markdown document whose source a Forth program supplies.  `doc-open`
+// makes an empty pane and returns its child id; `doc-set` replaces the
+// Markdown; `doc-append` streams more onto the end.  The pane re-parses
+// and repaints itself on the GUI thread after each edit.
+
+/// Open an empty Markdown doc-pane with the UTF-8 title at
+/// `title_addr..title_addr+title_len`.  Returns the child id (>0) on
+/// success, 0 on failure.
+#[no_mangle]
+pub extern "C" fn rt_doc_open(title_addr: u64, title_len: u64) -> u64 {
+    #[cfg(windows)]
+    {
+        let title = unsafe {
+            std::slice::from_raw_parts(title_addr as *const u8, title_len as usize)
+        };
+        let title = std::str::from_utf8(title).unwrap_or("∴ doc");
+        match igui::doc_pane::open(title) {
+            Some(id) => id as u64,
+            None => 0,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (title_addr, title_len);
+        0
+    }
+}
+
+/// Replace doc-pane `child_id`'s Markdown with the UTF-8 text at
+/// `md_addr..md_addr+md_len`.  Returns 1 on success, 0 if the pane is
+/// gone or the bytes aren't valid UTF-8.
+#[no_mangle]
+pub extern "C" fn rt_doc_set(child_id: u64, md_addr: u64, md_len: u64) -> u64 {
+    #[cfg(windows)]
+    {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(md_addr as *const u8, md_len as usize)
+        };
+        let Ok(md) = std::str::from_utf8(bytes) else { return 0 };
+        if igui::doc_pane::set_markdown(child_id as i64, md) { 1 } else { 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (child_id, md_addr, md_len);
+        0
+    }
+}
+
+/// Append the UTF-8 text at `md_addr..md_addr+md_len` to doc-pane
+/// `child_id`'s Markdown.  Returns 1 on success, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn rt_doc_append(child_id: u64, md_addr: u64, md_len: u64) -> u64 {
+    #[cfg(windows)]
+    {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(md_addr as *const u8, md_len as usize)
+        };
+        let Ok(md) = std::str::from_utf8(bytes) else { return 0 };
+        if igui::doc_pane::append_markdown(child_id as i64, md) { 1 } else { 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (child_id, md_addr, md_len);
+        0
+    }
+}
+
 // ─── Forth-side event API ────────────────────────────────────────────
 //
 // `gpane-next-event ( child_id timeout-ms -- p4 p3 p2 p1 kind )` pulls

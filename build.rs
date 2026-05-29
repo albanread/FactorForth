@@ -96,6 +96,10 @@ fn main() {
         "rt_gpane_line",
         "rt_gpane_fill_circle",
         "rt_gpane_next_event_for",
+        // Doc-pane FFI — Forth-writable Markdown window (igui::doc_pane).
+        "rt_doc_open",
+        "rt_doc_set",
+        "rt_doc_append",
     ];
     // Apply only to bins/tests that actually link session.rs.
     // The legacy `embed-smoke` binary doesn't (it does its own

@@ -41,6 +41,7 @@ mod executor;
 mod font_metrics;
 pub mod lisp_shims;
 pub mod doc_pane;
+pub mod help_pane;
 pub mod log_view;
 pub mod fconsole;
 pub mod repl_pane;

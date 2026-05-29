@@ -88,9 +88,15 @@ pub(crate) const WM_IGUI_FCONSOLE_FLUSH: u32 = WM_USER + 9;
 /// a future VEH path); flush the captured dumps into the crash
 /// view, opening it if it isn't already.  wparam/lparam unused.
 pub(crate) const WM_IGUI_CRASH_FLUSH: u32 = WM_USER + 10;
-/// Open a built-in doc-pane MDI child rendering a Markdown string.
-/// Same marshaling rationale as WM_IGUI_OPEN_TEXT.
-const WM_IGUI_OPEN_DOC: u32 = WM_USER + 11;
+/// Open the built-in help-pane MDI child — the DocCrate-style folder
+/// browser.  Same marshaling rationale as WM_IGUI_OPEN_TEXT.
+const WM_IGUI_OPEN_HELP: u32 = WM_USER + 11;
+/// Open a generic, Forth-writable Markdown doc-pane MDI child.  Same
+/// marshaling rationale as WM_IGUI_OPEN_TEXT.
+const WM_IGUI_OPEN_DOC: u32 = WM_USER + 12;
+/// Repaint a doc-pane after its Markdown source changed.  Posted (not
+/// sent) — same rationale as WM_IGUI_TEXT_FLUSH.
+const WM_IGUI_DOC_FLUSH: u32 = WM_USER + 13;
 /// Sent from the language thread to a render-host HWND to install
 /// or clear a Win32 timer driving `EvTick` events.
 /// `wparam` carries the interval in ms (0 = clear), `lparam` is unused.
@@ -202,7 +208,7 @@ pub(crate) fn demo_files_snapshot() -> Vec<(u16, String, std::path::PathBuf)> {
 /// standalone `doc-crate.exe` test harness uses).  On demand only — we
 /// don't auto-show it.  We're already on the GUI thread here (called
 /// from the frame's WM_COMMAND), so we create the child directly rather
-/// than marshaling through `open_doc_child`.
+/// than marshaling through `open_help_child`.
 ///
 /// Manual-page search order:
 ///   1. `<exe_dir>/docs/coreprotocols.md`           — production install
@@ -234,7 +240,7 @@ pub(crate) fn open_docs() {
         return;
     };
     let title: Vec<u16> = "Manual\u{0}".encode_utf16().collect();
-    super::doc_pane::create_on_gui_thread(mdi, &title, &docs_dir.to_string_lossy());
+    super::help_pane::create_on_gui_thread(mdi, &title, &docs_dir.to_string_lossy());
 }
 
 /// Scan for `demos/*.f` files and return `(menu_id, display_name, path)`
@@ -773,15 +779,30 @@ unsafe extern "system" fn frame_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_IGUI_OPEN_HELP => {
+            let req_ptr = lparam.0 as *mut OpenHelpRequest;
+            if !req_ptr.is_null() {
+                let req = unsafe { &mut *req_ptr };
+                if let Some(mdi_client) = mdi_client_hwnd() {
+                    req.out =
+                        super::help_pane::create_on_gui_thread(mdi_client, &req.title, &req.path);
+                }
+            }
+            LRESULT(0)
+        }
         WM_IGUI_OPEN_DOC => {
             let req_ptr = lparam.0 as *mut OpenDocRequest;
             if !req_ptr.is_null() {
                 let req = unsafe { &mut *req_ptr };
                 if let Some(mdi_client) = mdi_client_hwnd() {
-                    req.out =
-                        super::doc_pane::create_on_gui_thread(mdi_client, &req.title, &req.path);
+                    req.out = super::doc_pane::create_on_gui_thread(mdi_client, &req.title);
                 }
             }
+            LRESULT(0)
+        }
+        WM_IGUI_DOC_FLUSH => {
+            let child_id = wparam.0 as i64;
+            super::doc_pane::flush_on_gui_thread(child_id);
             LRESULT(0)
         }
         WM_IGUI_TEXT_FLUSH => {
@@ -1263,6 +1284,11 @@ pub(crate) struct OpenTextRequest {
 
 pub(crate) struct OpenDocRequest {
     pub title: Vec<u16>,
+    pub out: Option<i64>,
+}
+
+pub(crate) struct OpenHelpRequest {
+    pub title: Vec<u16>,
     /// A docs folder (→ sidebar) or a single `.md` file path.
     pub path: String,
     pub out: Option<i64>,
@@ -1359,14 +1385,37 @@ pub fn open_text_child(title: &str) -> Option<i64> {
     req.out
 }
 
-/// Open a doc-pane MDI child browsing `path` (a docs folder, or a single
-/// `.md` file).  Marshals to the GUI thread like `open_text_child`.
-pub fn open_doc_child(title: &str, path: &str) -> Option<i64> {
+/// Open a generic Forth-writable Markdown pane.  Marshals to the GUI
+/// thread like `open_text_child`; the returned child id is the token
+/// Forth uses with `doc_pane::set_markdown` / `append_markdown`.
+pub fn open_doc_child(title: &str) -> Option<i64> {
     let frame_raw = *FRAME_HWND.get()?;
     let frame = HWND(frame_raw as *mut _);
     let mut title_w: Vec<u16> = title.encode_utf16().collect();
     title_w.push(0);
     let mut req = OpenDocRequest {
+        title: title_w,
+        out: None,
+    };
+    unsafe {
+        SendMessageW(
+            frame,
+            WM_IGUI_OPEN_DOC,
+            Some(WPARAM(0)),
+            Some(LPARAM(&mut req as *mut _ as isize)),
+        )
+    };
+    req.out
+}
+
+/// Open a help-pane MDI child browsing `path` (a docs folder, or a single
+/// `.md` file).  Marshals to the GUI thread like `open_text_child`.
+pub fn open_help_child(title: &str, path: &str) -> Option<i64> {
+    let frame_raw = *FRAME_HWND.get()?;
+    let frame = HWND(frame_raw as *mut _);
+    let mut title_w: Vec<u16> = title.encode_utf16().collect();
+    title_w.push(0);
+    let mut req = OpenHelpRequest {
         title: title_w,
         path: path.to_owned(),
         out: None,
@@ -1374,7 +1423,7 @@ pub fn open_doc_child(title: &str, path: &str) -> Option<i64> {
     unsafe {
         SendMessageW(
             frame,
-            WM_IGUI_OPEN_DOC,
+            WM_IGUI_OPEN_HELP,
             Some(WPARAM(0)),
             Some(LPARAM(&mut req as *mut _ as isize)),
         )
@@ -1458,6 +1507,24 @@ pub(crate) fn post_text_flush(child_id: i64) {
         PostMessageW(
             Some(frame),
             WM_IGUI_TEXT_FLUSH,
+            WPARAM(child_id as usize),
+            LPARAM(0),
+        )
+    };
+}
+
+/// Counterpart to `post_text_flush` for a Markdown doc-pane.  Posted
+/// (not sent) so a streaming `append_markdown` loop doesn't block on
+/// the GUI thread.
+pub(crate) fn post_doc_flush(child_id: i64) {
+    let Some(frame_raw) = FRAME_HWND.get() else {
+        return;
+    };
+    let frame = HWND(*frame_raw as *mut _);
+    let _ = unsafe {
+        PostMessageW(
+            Some(frame),
+            WM_IGUI_DOC_FLUSH,
             WPARAM(child_id as usize),
             LPARAM(0),
         )
