@@ -653,11 +653,22 @@ fn emit_specializer_list(m: &super::ast::MethodDef, out: &mut String) {
             // Specialised slots → mangled user-class name (so it
             // matches the `TUPLE: <mangled>` emit_class wrote).
             // Unspecialised slots → bare `object`, Factor's universal
-            // class — must NOT be mangled.
+            // class.  And critically: an EXPLICIT `b:object` from
+            // the user also means Factor's `object` — the default
+            // catch-all methods in core.f (`equals?`/`show`/`clone`
+            // on `b:object`) depend on this never being mangled.
+            // (A user who defined `CLASS: object` would shadow it,
+            // but that name is reserved by convention.)
             let cls = m.specializers.iter()
                 .find(|s| s.position as usize == pos)
-                .map(|s| super::resolve::factor_user_name(
-                    &s.class_name.to_ascii_lowercase()))
+                .map(|s| {
+                    let raw = s.class_name.to_ascii_lowercase();
+                    if raw == "object" {
+                        "object".to_string()
+                    } else {
+                        super::resolve::factor_user_name(&raw)
+                    }
+                })
                 .unwrap_or_else(|| "object".to_string());
             out.push_str(&cls);
             out.push(' ');

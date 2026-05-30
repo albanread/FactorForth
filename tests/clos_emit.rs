@@ -79,6 +79,19 @@ fn class_gets_membership_predicate() {
 }
 
 #[test]
+fn explicit_object_specializer_stays_raw() {
+    // The default catch-all methods in core.f write `( a b:object -- ? )`
+    // by hand.  That explicit `object` must NOT mangle — it refers to
+    // Factor's universal class, the same word the implicit fill uses,
+    // not a user class.  Mangling it produced `z-object` and broke
+    // generic dispatch for the catch-all (no method on z-object).
+    let out = ir("GENERIC: eqx ( a b -- ? ) \
+                  METHOD: eqx ( a b:object -- ? ) 2drop 0 ;");
+    assert!(out.contains("multi-methods:METHOD: z-eqx { object object }"),
+        "explicit b:object must emit raw `object`, not `z-object`:\n{out}");
+}
+
+#[test]
 fn unspecialised_input_position_fills_with_object() {
     // `( c:cat y -- z )` specialises only the FIRST (deepest) input,
     // so the list is `{ cat object }` — dispatch keys on the cat,
