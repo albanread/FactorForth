@@ -229,6 +229,40 @@ r read-line show        \ line2
 
 ---
 
+## Number ↔ string
+
+A pair of bridges over Factor's `number>string` / `string>number`,
+wrapped so they speak our `string` class — not Factor's native
+strings, which our protocols don't see.
+
+| word        | stack effect    | description                                    |
+|-------------|-----------------|------------------------------------------------|
+| `n>string`  | `( n -- s )`    | render a number (int or float) as a fresh string |
+| `s>n`       | `( s -- n ? )`  | parse a string as a number; flag false on failure |
+
+Integer base follows `BASE` — the same `n>string` in `HEX:` mode
+renders hexadecimal. Floats use Factor's default float formatting.
+Parsing accepts the same syntax Factor's `string>number` does
+(decimals, scientific notation, radix prefixes).
+
+The two-value return on `s>n` matters: a successfully parsed `"0"`
+is `( 0 -1 )`, while a failure is `( 0 0 )`. Test the flag, never
+the value:
+
+```forth
+S" 42" >string s>n .      \ -1 (flag), then "42" not yet popped
+S" 42" >string s>n drop . \ 42 (the parsed value, after dropping flag)
+
+\ The round-trip is the canonical correctness check:
+S" 3.14" >string s>n drop n>string show  \ 3.14
+```
+
+`n>string` returns a first-class `string`, so it composes with
+every text utility: `42 n>string 8 '0' pad-left show` →
+`00000042`.
+
+---
+
 ## Extending the protocol
 
 To make your own class a stream, implement the generic for its

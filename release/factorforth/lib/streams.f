@@ -329,3 +329,30 @@ METHOD: at! ( v i s:string -- )     string>chars at! ;
         s size 0 ?do  i s at  dst string-push  loop
     loop
     dst ;
+
+\ ── Number ↔ string conversion ────────────────────────────────────
+\
+\ A pair of bridges over Factor's `number>string` / `string>number`,
+\ wrapped so they speak our `string` class rather than Factor's
+\ native string type.
+\
+\ Integer base follows the current `BASE` (so the same `n>string` in
+\ `HEX:` mode renders hex), and floats / scientific notation /
+\ Factor-style numeric literals are all accepted on the parsing
+\ side.  Failure on `s>n` returns the standard ANS two-value
+\ shape `( 0 0 )` so a parsed zero is unambiguous.
+
+\ n>string ( n -- s ) — render a number as a fresh string.  Works on
+\ ints (in the current `BASE`) and floats (via Factor's default
+\ float-to-string formatting).  Wraps the runtime rawvec → darray →
+\ string so the result is a first-class `string` (the same class
+\ `>string` returns) — collection algorithms work on it directly.
+: n>string ( n -- s )   num>chars <darray> <string> ;
+
+\ s>n ( s -- n ? ) — parse a string as a number.  Returns `( n -1 )`
+\ on success or `( 0 0 )` on any parse failure (empty, non-numeric,
+\ trailing garbage).  Use the flag to branch; don't treat 0 as a
+\ sentinel because a string of "0" parses successfully to 0.
+\ Unwraps string → darray → rawvec so the runtime sees a Factor
+\ sequence it can feed to `string>number`.
+: s>n ( s -- n ? )      string>chars darray>data chars>num ;

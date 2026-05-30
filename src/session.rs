@@ -836,6 +836,25 @@ IN: forth.runtime
 : nf-set-del     ( elt s -- )    delete ;
 : nf-set-len     ( s -- n )      cardinality ;
 : nf-set-members ( s -- vec )    members >vector ;
+
+! ── number ↔ string char-sequence bridges ─────────────────────────
+! `nf-num>str-chars` renders any number (integer or float, in any
+! current base for integers) as a fresh Factor vector of char codes.
+! Wrapped on the Forth side by `n>string` to produce the
+! CoreProtocols `string` class.  Goes through Factor's
+! `number>string`, so it handles base/precision the same way
+! Factor's own `.` does.
+: nf-num>str-chars ( n -- vec )  number>string >vector ;
+
+! `nf-str>num` parses a sequence of char codes (our string's inner
+! rawvec, or any sequence of integers) as a number.  Returns
+! ( n -1 ) on success, ( 0 0 ) on failure — the standard ANS
+! two-return shape, so the caller can distinguish a parsed zero
+! from "couldn't parse".  Floats / scientific / radix prefixes are
+! all accepted (whatever Factor's `string>number` accepts).
+: nf-str>num ( char-seq -- n ? )
+    >string string>number
+    dup [ -1 ] [ drop 0 0 ] if ;
 "#;
 
 fn worker_main(

@@ -454,6 +454,13 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("hs-len",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-len"     }),
         ("hs-members", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-set-members" }),
 
+        // Number ↔ string char-sequence bridges.  Used by streams.f's
+        // `n>string` / `s>n` to render and parse numbers via Factor's
+        // own `number>string` / `string>number`.  Integer base follows
+        // the current `BASE`; floats and scientific notation work too.
+        ("num>chars",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-num>str-chars" }),
+        ("chars>num",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-str>num"       }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

@@ -308,3 +308,71 @@ fn string_is_a_collection() {
     assert!(cap.contains("any=-1"),    "any? on string: {cap}");
     assert!(cap.contains("all=-1"),    "all? on string: {cap}");
 }
+
+/// `n>string` renders any number — int (in current base) or float —
+/// as a fresh string of our `string` class.  The round-trip with
+/// `s>n` is the canonical test.
+#[test]
+#[ignore]
+fn n_to_string_and_back() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" 42 n>string show ." ]"
+        ." |[" -17 n>string show ." ]"
+        ." |[" 0 n>string show ." ]"
+        \ Round-trip: s>n . n>string . show
+        ." |rt=" S" 12345" >string s>n . n>string show
+        \ Failure: leading garbage
+        ." |fail=" S" abc" >string s>n . .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[42]"), "positive: {cap}");
+    assert!(cap.contains("[-17]"), "negative: {cap}");
+    assert!(cap.contains("[0]"), "zero: {cap}");
+    // s>n leaves ( n -1 ); first `.` prints flag, second `n>string`
+    // re-renders the number.
+    assert!(cap.contains("rt=-1 12345"), "round-trip: {cap}");
+    // failure leaves ( 0 0 ); two `.`s print "0 " each.
+    assert!(cap.contains("fail=0 0"), "parse failure: {cap}");
+}
+
+/// `s>n`'s flag distinguishes a successfully parsed zero from
+/// "couldn't parse" — the whole point of the two-return shape.
+#[test]
+#[ignore]
+fn s_to_n_zero_vs_failure() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        \ "0" parses to 0 with flag -1.
+        ." z=" S" 0" >string s>n .   .   \ flag then n
+        \ "" fails; both returns are zero.
+        ." e=" S" " >string s>n .  .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("z=-1 0"), "zero parse: {cap}");
+    assert!(cap.contains("e=0 0"), "empty parse fails: {cap}");
+}
+
+/// Floats round-trip too: n>string handles them via Factor's float
+/// formatting, s>n handles standard float syntax (decimal point,
+/// exponent).
+#[test]
+#[ignore]
+fn n_to_string_floats() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        \ Render then parse: the parsed value should equal the original.
+        ." pi=" 3.14e n>string show
+        ." |back=" S" 3.14" >string s>n . .   \ flag then value
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("pi=3.14"), "float render: {cap}");
+    // s>n flag then value: "back=-1 3.14"
+    assert!(cap.contains("back=-1 3.14"), "float parse: {cap}");
+}
