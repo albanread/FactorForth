@@ -528,3 +528,84 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
         dup d dict-at drop                         \ key value
         xt call2
     loop ;
+
+\ ── dict transforms: map / filter / merge / fold ──────────────────
+\
+\ Pure protocol composition over `dict-keys`, `dict-at`, `dict-set`.
+\ Each one returns a FRESH dict; the inputs are untouched.  The
+\ snapshot via `dict-keys` means it's safe to mutate the source
+\ dict from inside an xt body — the iteration walks the snapshot.
+
+\ dict-map ( d xt -- d' ) — `xt ( v -- v' )` applied to every value.
+\ Keys are preserved; the result has the same key set as the input.
+: dict-map ( d xt -- d' ) {: d xt :}
+    new-dict {: result :}
+    d dict-keys {: ks :}
+    ks size 0 ?do
+        i ks at                                    \ k
+        dup d dict-at drop                         \ k v
+        xt call1>                                  \ k v'
+        swap result dict-set                       \ store v' at k
+    loop
+    result ;
+
+\ dict-filter ( d xt -- d' ) — `xt ( k v -- ? )` decides whether to
+\ keep each entry.  Both key and value are visible to the
+\ predicate, so filters that care about either work directly.
+\ Note: keeps k and v on the data stack inside the loop body; we
+\ can't introduce mid-body `{: :}` blocks inside `?do` (only at
+\ the top of a colon def's body).
+: dict-filter ( d xt -- d' ) {: d xt :}
+    new-dict {: result :}
+    d dict-keys {: ks :}
+    ks size 0 ?do
+        i ks at                                    \ k
+        dup d dict-at drop                         \ k v
+        2dup xt call2>                             \ k v ?
+        if
+            swap  result dict-set                  \ store v at k
+        else
+            2drop
+        then
+    loop
+    result ;
+
+\ dict-merge ( a b -- c ) — combine into a fresh dict.  When the
+\ same key appears in both, `b` wins.  Order: a's entries first,
+\ then b's overwrites — but final state is independent of order
+\ because dicts have no positional notion.
+: dict-merge ( a b -- c ) {: a b :}
+    new-dict {: result :}
+    a dict-keys {: aks :}
+    aks size 0 ?do
+        i aks at                                   \ k
+        dup a dict-at drop                         \ k v
+        swap result dict-set                       \ store v at k
+    loop
+    b dict-keys {: bks :}
+    bks size 0 ?do
+        i bks at
+        dup b dict-at drop
+        swap result dict-set
+    loop
+    result ;
+
+\ dict-fold-values ( d acc xt -- acc' ) — fold over the VALUES with
+\ an accumulator.  `xt ( acc v -- acc' )`, same shape as
+\ `collection-fold`.  Use this for summing / max / collect / etc.
+\ (Folding over (k v) pairs would need a 3-arity call primitive;
+\ this is the practical 2-arity version that covers the
+\ value-only case directly.)
+\
+\ Note: all three inputs are bound as locals so the data stack can
+\ start clean.  `acc` is then pushed once as the initial value and
+\ evolved on the stack through the loop — its identity-as-local is
+\ frozen at the seed, but the running accumulator flows through
+\ the iteration normally.
+: dict-fold-values ( d acc xt -- acc' ) {: d acc xt :}
+    d dict-keys {: ks :}
+    acc                                            \ seed acc on stack
+    ks size 0 ?do
+        i ks at  d dict-at drop                    \ ( acc v )
+        xt call2>                                  \ ( acc' )
+    loop ;

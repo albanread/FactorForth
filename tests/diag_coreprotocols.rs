@@ -960,3 +960,121 @@ fn reverse_returns_new_collection_in_reverse() {
     assert!(cap.contains("orig=1"),
         "original collection must be untouched: {cap}");
 }
+
+/// `dict-map` transforms every value, keeping the keys.  The
+/// result has the same key set; the original dict is untouched.
+#[test]
+#[ignore]
+fn dict_map_transforms_values() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE d
+        1 'a' d dict-set                            \ {a: 1, b: 2, c: 3}
+        2 'b' d dict-set
+        3 'c' d dict-set
+        : double ( n -- m ) 2 * ;
+        d ' double dict-map VALUE d2
+        \ dict-at leaves ( value flag ); swap to print value-then-flag.
+        ." a=" 'a' d2 dict-at swap . . cr
+        ." b=" 'b' d2 dict-at swap . . cr
+        ." c=" 'c' d2 dict-at swap . . cr
+        ." origA=" 'a' d  dict-at swap . . cr        \ original unchanged
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    // dict-at leaves (value flag); two `.`s print "value -1".  Third `.` is bonus drop.
+    assert!(cap.contains("a=2 -1"), "double of 1: {cap}");
+    assert!(cap.contains("b=4 -1"), "double of 2: {cap}");
+    assert!(cap.contains("c=6 -1"), "double of 3: {cap}");
+    assert!(cap.contains("origA=1 -1"), "original untouched: {cap}");
+}
+
+/// `dict-filter` keeps entries by a (key, value) predicate; the
+/// rest are dropped.  Both halves of the entry are visible to the
+/// xt, so filters that key off either work.
+#[test]
+#[ignore]
+fn dict_filter_by_predicate() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE d
+        10 'a' d dict-set
+        20 'b' d dict-set
+        30 'c' d dict-set
+        40 'd' d dict-set
+        : big? ( k v -- ? ) nip 25 > ;
+        d ' big? dict-filter VALUE got
+        ." n=" got size .
+        ." |hasA=" 'a' got dict-has? .
+        ." |hasB=" 'b' got dict-has? .
+        ." |hasC=" 'c' got dict-has? .
+        ." |hasD=" 'd' got dict-has? .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=2"), "two over threshold: {cap}");
+    assert!(cap.contains("hasA=0"), "A dropped: {cap}");
+    assert!(cap.contains("hasB=0"), "B dropped: {cap}");
+    assert!(cap.contains("hasC=-1"), "C kept: {cap}");
+    assert!(cap.contains("hasD=-1"), "D kept: {cap}");
+}
+
+/// `dict-merge` combines two dicts into a fresh one; on key
+/// conflicts, `b` (the second arg) wins.  Originals untouched.
+#[test]
+#[ignore]
+fn dict_merge_b_wins_conflicts() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE a
+        1 'x' a dict-set                            \ a = {x:1, y:2}
+        2 'y' a dict-set
+        new-dict VALUE b
+        99 'y' b dict-set                           \ b = {y:99, z:3}
+        3  'z' b dict-set
+        a b dict-merge VALUE m
+        ." x=" 'x' m dict-at swap . .                \ x=1 -1
+        ." |y=" 'y' m dict-at swap . .               \ y=99 -1  (b won)
+        ." |z=" 'z' m dict-at swap . .               \ z=3 -1
+        ." |size=" m size .                          \ 3 keys total
+        \ originals untouched:
+        ." |orig-y=" 'y' a dict-at swap . .          \ a's y is still 2
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("x=1 -1"), "a's x preserved: {cap}");
+    assert!(cap.contains("y=99 -1"), "b's y overwrites: {cap}");
+    assert!(cap.contains("z=3 -1"), "b's z added: {cap}");
+    assert!(cap.contains("size=3"), "union size: {cap}");
+    assert!(cap.contains("orig-y=2 -1"), "a untouched: {cap}");
+}
+
+/// `dict-fold-values` accumulates over the values with an xt of
+/// shape ( acc v -- acc' ).  Same fold-protocol shape as the
+/// collection-level `fold`.
+#[test]
+#[ignore]
+fn dict_fold_values_sums_them() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE d
+        10 'a' d dict-set
+        20 'b' d dict-set
+        30 'c' d dict-set
+        40 'd' d dict-set
+        ." sum=" d 0 ' + dict-fold-values .         \ 100
+        ." |max=" d 0 ' max dict-fold-values .       \ 40
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sum=100"), "fold sum: {cap}");
+    assert!(cap.contains("max=40"), "fold max: {cap}");
+}
