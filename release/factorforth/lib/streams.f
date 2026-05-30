@@ -459,3 +459,52 @@ METHOD: at! ( v i s:string -- )     string>chars at! ;
 : format3 ( s a b c -- t ) {: s a b c :}
     new-darray {: d :}  a d d-push  b d d-push  c d d-push
     s d format ;
+
+\ ── File I/O ─────────────────────────────────────────────────────
+\
+\ Read and write whole files through Factor's `io.files`, in UTF-8.
+\ All four words speak our `string` class — pass a path as a
+\ string, get the contents back as a string, write a string out.
+\
+\ Errors (missing file, permission denied, encoding faults) surface
+\ as the usual "ANS error -N" message; recover with the normal
+\ try-style pattern if you want to handle them in Forth, or
+\ `file-exists?` first to avoid them.
+
+\ Tiny helper: unwrap `string` → its inner rawvec, which is what
+\ the runtime bridges want.  Lifted out so the file-I/O words read
+\ as one-liners and the same unwrap doesn't appear five times.
+: string>vec ( s -- vec )  string>chars darray>data ;
+
+\ Wrap a runtime-returned char vector as a fresh `string`.
+: vec>string ( vec -- s )  <darray> <string> ;
+
+\ slurp-file ( path -- s ) — read the whole file at `path` as a
+\ string.  Throws (as an ANS error) if the file doesn't exist.
+: slurp-file ( path -- s )
+    string>vec slurp-vec vec>string ;
+
+\ spit-file ( s path -- ) — write the whole string `s` to `path`,
+\ overwriting any existing file.  Creates the file if missing.
+: spit-file ( s path -- )
+    string>vec swap string>vec swap spit-vec ;
+
+\ file-exists? ( path -- ? ) — does anything live at `path`?  Use
+\ before slurp-file when an error would be unhelpful (e.g.
+\ optional config files).
+: file-exists? ( path -- ? )
+    string>vec file-exists-vec? ;
+
+\ file-lines ( path -- lines ) — read the whole file and split on
+\ newline.  Returns a darray of strings, one per line.  Trailing
+\ newline (if any) produces an empty final field, like split's
+\ usual round-trip convention.
+: file-lines ( path -- lines )
+    slurp-file '\n' split ;
+
+\ write-lines ( lines path -- ) — join lines with newlines and
+\ write.  No trailing newline is added; if you want one, push an
+\ empty string into `lines` before calling (`new-string lines
+\ d-push`).
+: write-lines ( lines path -- )
+    swap '\n' join swap spit-file ;

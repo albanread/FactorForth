@@ -475,6 +475,103 @@ fn format_renders_user_classes() {
     assert!(cap.contains("[pos=(3 ,4 )]"), "format user class: {cap}");
 }
 
+/// Build a fresh path under the system temp directory.  Returns
+/// the path as a string Forth can `S" ... "` into, with backslashes
+/// escaped for the Forth literal.  Each test gets its own unique
+/// path so they don't fight over the same file.
+fn temp_path(stem: &str) -> String {
+    let mut p = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    p.push(format!("nf-{}-{}-{}.tmp", stem, pid, nanos));
+    let s = p.to_string_lossy().to_string();
+    // Forth `S" ... "` accepts UTF-8 bytes literally; backslashes in
+    // Windows paths aren't escape chars in S" — they pass through.
+    s
+}
+
+/// `spit-file` then `slurp-file` round-trips the contents byte-for-
+/// byte.  Uses a unique temp path so tests don't collide.
+#[test]
+#[ignore]
+fn spit_then_slurp_roundtrips() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    let path = temp_path("roundtrip");
+    let src = format!(r#"
+        S" hello, world!" >string  S" {path}" >string  spit-file
+        ." [" S" {path}" >string slurp-file show ." ]"
+    "#);
+    run(&s, &mut ctx, &src);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[hello, world!]"), "round-trip: {cap}");
+    // Clean up — tests share the temp dir so we don't want to litter.
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `file-exists?` distinguishes a missing path from one that's been
+/// written.  Test against a path we know doesn't exist, then write,
+/// then ask again.
+#[test]
+#[ignore]
+fn file_exists_before_and_after_write() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    let path = temp_path("exists");
+    // Make sure it doesn't exist (defensive — previous run cleanup
+    // might have failed).
+    let _ = std::fs::remove_file(&path);
+    let src = format!(r#"
+        ." pre=" S" {path}" >string file-exists? .
+        S" data" >string  S" {path}" >string  spit-file
+        ." |post=" S" {path}" >string file-exists? .
+    "#);
+    run(&s, &mut ctx, &src);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("pre=0"), "missing should be 0: {cap}");
+    assert!(cap.contains("post=-1"), "present should be -1: {cap}");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `file-lines` reads a file as a darray of strings, one per line.
+/// `write-lines` is its inverse; the round-trip preserves content
+/// (with the caveat that an empty trailing field appears if the
+/// file ends with a newline — same convention as `split`).
+#[test]
+#[ignore]
+fn file_lines_round_trip() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    let path = temp_path("lines");
+    let src = format!(r#"
+        \ Build three lines, write, read back, show.
+        new-darray VALUE ls
+        S" alpha" >string ls d-push
+        S" beta"  >string ls d-push
+        S" gamma" >string ls d-push
+        ls S" {path}" >string write-lines
+        \ Now read it back and verify each line.
+        S" {path}" >string file-lines VALUE got
+        ." n=" got size .
+        ." |0=" 0 got at show
+        ." |1=" 1 got at show
+        ." |2=" 2 got at show
+    "#);
+    run(&s, &mut ctx, &src);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=3"), "three lines: {cap}");
+    assert!(cap.contains("0=alpha"), "line 0: {cap}");
+    assert!(cap.contains("1=beta"), "line 1: {cap}");
+    assert!(cap.contains("2=gamma"), "line 2: {cap}");
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Floats round-trip too: n>string handles them via Factor's float
 /// formatting, s>n handles standard float syntax (decimal point,
 /// exponent).

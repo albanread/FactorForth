@@ -396,6 +396,12 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("chars>num",   e(1, 2)); // seq -- n ?
     m.insert("capture1",    e(2, 1)); // x xt -- vec
 
+    // File I/O bridges.  Vec-typed raw entry points; Forth wrappers
+    // in streams.f turn them into string-typed `slurp-file` / etc.
+    m.insert("slurp-vec",        e(1, 1)); // path-vec -- contents-vec
+    m.insert("spit-vec",         e(2, 0)); // contents-vec path-vec --
+    m.insert("file-exists-vec?", e(1, 1)); // path-vec -- ?
+
     // Doc-pane (forth.wf64-gfx): Forth-writable Markdown window.
     m.insert("doc-open",    e(2, 1)); // c-addr u -- id
     m.insert("doc-set",     e(3, 0)); // c-addr u id --

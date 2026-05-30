@@ -467,6 +467,13 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         // `show` and collect the result instead of printing it.
         ("capture1",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-capture-1"     }),
 
+        // File I/O bridges (Factor's io.files + io.encodings.utf8).
+        // Forth wrappers in streams.f speak our `string` class; these
+        // raw entry points take/return char-code vectors.
+        ("slurp-vec",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-slurp-file"    }),
+        ("spit-vec",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-spit-file"     }),
+        ("file-exists-vec?", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-file-exists?" }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

@@ -670,7 +670,9 @@ struct NfApi<'lib> {
 /// detail, not a user word."
 const TOOLS_SETUP_SRC: &str = r#"
 USING: kernel math math.parser sequences arrays vectors strings
-       byte-arrays io io.streams.string classes words quotations vocabs grouping
+       byte-arrays io io.streams.string io.files io.files.info
+       io.encodings.utf8
+       classes words quotations vocabs grouping
        namespaces accessors combinators prettyprint.config
        assocs hashtables sets hash-sets
        forth.runtime ;
@@ -866,6 +868,27 @@ IN: forth.runtime
 : nf-capture-1 ( x xt -- vec )
     [ call( x -- ) ] with-string-writer
     >vector ;
+
+! ── File I/O bridges ──────────────────────────────────────────────
+! Read / write whole files through Factor's `io.files`, in UTF-8.
+! All three take and return char-code vectors so the Forth side can
+! wrap them with the `string` class.  Errors (missing file, permission
+! denied, etc.) bubble up as Factor exceptions, which the eval-callback
+! translates to "ANS error -N" the same way it does for any other
+! runtime fault.
+: nf-slurp-file ( path-vec -- contents-vec )
+    >string utf8 file-contents
+    >vector ;
+
+: nf-spit-file ( contents-vec path-vec -- )
+    >string swap >string swap utf8 set-file-contents ;
+
+! Existence probe: true iff a directory entry exists at the path.
+! Doesn't distinguish files from directories — the caller does that
+! if needed.  `io.files:file-exists?` is the Factor primitive;
+! bool>flag converts its t/f to the ANS -1/0 shape.
+: nf-file-exists? ( path-vec -- ? )
+    >string file-exists? bool>flag ;
 "#;
 
 fn worker_main(
