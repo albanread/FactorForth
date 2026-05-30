@@ -80,3 +80,54 @@ fn locals_shadow_outer_words() {
     assert!(cap.contains("d=10"), "outer `dup` broken: {cap}");
     assert!(cap.contains("s=-1"), "local `dup` didn't shadow: {cap}");
 }
+
+/// `_` is the anonymous-discard marker — it consumes a stack slot
+/// but binds no name, so the body has no way to reference it.  This
+/// is the clean idiom for a method whose effect dictates an arg the
+/// implementation ignores (the object catch-all in a generic, for
+/// instance).
+#[test]
+#[ignore]
+fn underscore_discards_a_local() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        \ Head locals: discard the middle of three args.
+        : take-outer ( a b c -- d ) {: x _ z :} x z + ;
+        ." r=" 100 999 5 take-outer .            \ 105
+
+        \ Two `_`s in one block; both consumed, neither bound.
+        : sum-edges ( a b c d -- s ) {: a _ _ d :} a d + ;
+        ." s=" 7 88 77 3 sum-edges .              \ 10
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("r=105"), "single _ discard: {cap}");
+    assert!(cap.contains("s=10"), "multiple _ discards: {cap}");
+}
+
+/// Mid-body `_` works the same way: a `{: a _ c :}` block in the
+/// middle of a body consumes three stack values, naming only two.
+#[test]
+#[ignore]
+fn underscore_in_mid_body_block() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        : pick-around ( a b c -- ac ) {: a _ c :} a c + ;
+        ." mid=" 4 999 6 pick-around .            \ 10
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("mid=10"), "mid-body _ discard: {cap}");
+}
+
+/// Referring to `_` from user code is an error — it isn't a real
+/// binding.  The resolver doesn't add it to the locals scope, so a
+/// reference falls through to the normal "undefined word" path.
+#[test]
+#[ignore]
+fn underscore_is_not_referenceable() {
+    let (_s, _out, mut ctx) = fresh();
+    let src = ": bogus ( a b -- c ) {: _ y :} _ y + ;";
+    let result = compile_in_context(src, &mut ctx);
+    assert!(result.is_err(), "expected compile error; got {result:?}");
+}

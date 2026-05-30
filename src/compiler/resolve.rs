@@ -662,6 +662,7 @@ pub fn resolve_with_prior_and_values_and_classes(
                 // writes their locals declarations in order, which is
                 // the natural thing).
                 let mut scope: std::collections::HashSet<String> = d.locals.iter()
+                    .filter(|l| l.name != "_")           // _ is the anonymous-discard marker
                     .map(|l| l.name.to_ascii_lowercase())
                     .collect();
                 collect_body_locals(&d.body, &mut scope);
@@ -730,6 +731,10 @@ fn collect_body_locals(exprs: &[Expr], scope: &mut std::collections::HashSet<Str
         match e {
             Expr::Locals { names, .. } => {
                 for l in names {
+                    // `_` is the anonymous-discard marker — it consumes
+                    // a stack slot but binds no name, so user code can't
+                    // (and shouldn't) reference it.
+                    if l.name == "_" { continue; }
                     scope.insert(l.name.to_ascii_lowercase());
                 }
             }

@@ -24,6 +24,32 @@
 //! intent.
 
 use std::fmt::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Per-emit counter for the anonymous-discard local placeholder.
+/// When a user writes `{: a _ c :}`, the `_` is rewritten to a unique
+/// `_dN` name so Factor's `::` form gets a real (unreferenced) local
+/// slot.  The counter is monotonic across a single compilation; we
+/// don't reset it because emit only runs once per CompileContext.
+static DISCARD_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Get the next discard placeholder name (`_d1`, `_d2`, …).
+fn next_discard_name() -> String {
+    let n = DISCARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    format!("_d{n}")
+}
+
+/// Rewrite a local name for emission.  `_` becomes a fresh unique
+/// `_dN`; everything else passes through unchanged.  Idempotent only
+/// in the sense that non-`_` names are stable — every call on `_`
+/// returns a new identifier (which is exactly what we want).
+fn emit_local_name(name: &str) -> String {
+    if name == "_" {
+        next_discard_name()
+    } else {
+        name.to_string()
+    }
+}
 
 use super::ast::{
     CaseArm, CollectionDef, CollectionKind, ConstFlavour, ConstValue,
@@ -1158,10 +1184,18 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
 /// effect is `Unknown`.
 fn emit_definition_with_locals(d: &Definition, r: &Sema, factor_name: &str, out: &mut String) {
     write!(out, ":: {factor_name} ( ").unwrap();
-    // Inputs: the lexical locals, in declaration order.
+    // Inputs: the lexical locals, in declaration order.  `_` is the
+    // anonymous-discard marker — it consumes its stack slot but the
+    // body never references it.  We rewrite each `_` to a fresh
+    // unique `_dN` so Factor's `::` form has a real (but unused) name
+    // for the slot.
     for l in &d.locals {
-        let n = l.name.to_ascii_lowercase();
-        let safe = if n.contains('.') { n.replace('.', "_") } else { n };
+        let safe = if l.name == "_" {
+            next_discard_name()
+        } else {
+            let n = l.name.to_ascii_lowercase();
+            if n.contains('.') { n.replace('.', "_") } else { n }
+        };
         out.push_str(&safe);
         out.push(' ');
     }
@@ -1565,9 +1599,18 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
         // `vocabs_needed` pass pulls in whenever any def declares
         // locals (head-of-body or mid-body).
         Expr::Locals { names, .. } => {
+            // Lower mid-body `{: a b c :}` to chained `:>` bindings in
+            // reverse declaration order (rightmost binds the top of the
+            // data stack first).  `_` is the anonymous-discard marker:
+            // we emit a fresh unique `_dN` so Factor still consumes a
+            // stack slot, but the body has no way to reference it.
             for l in names.iter().rev() {
-                let n = l.name.to_ascii_lowercase();
-                let safe = if n.contains('.') { n.replace('.', "_") } else { n };
+                let safe = if l.name == "_" {
+                    next_discard_name()
+                } else {
+                    let n = l.name.to_ascii_lowercase();
+                    if n.contains('.') { n.replace('.', "_") } else { n }
+                };
                 write!(out, ":> {safe} ").unwrap();
             }
         }

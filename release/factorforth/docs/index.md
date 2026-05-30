@@ -17,6 +17,8 @@ ANS Forth on Factor's VM, in a Direct2D IDE.
   Factor4th ships, organised by topic
 - [Stack effects](stack-effects.md) — what the `( a b -- c )`
   notation means and how the compiler uses it
+- [Locals](locals.md) — Forth-2012 `{: a b :}` lexical bindings,
+  plus the `_` anonymous-discard extension
 - [Classes and methods](classes.md) — CLASS:, SLOT:, GENERIC:,
   METHOD:, polymorphic slots, two setter idioms
 - [CoreProtocols](coreprotocols.md) — the CLOS object model and the
