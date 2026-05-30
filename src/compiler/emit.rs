@@ -316,20 +316,24 @@ fn emit_using_line(r: &Sema, out: &mut String) {
 /// matching ANS (variables read 0 before first store).
 fn emit_variable(v: &VariableDef, r: &Sema, out: &mut String) {
     let lc = v.name.to_ascii_lowercase();
+    let n = super::resolve::factor_user_name(&lc);
     let is_narrow = matches!(r.escape.get(&lc), Some(EscapeState::Narrow));
     if is_narrow {
-        // Narrow: `SYMBOL: x` defines `x` as a parser-level word
-        // that pushes the symbol itself when executed.  The peep in
-        // emit_exprs translates `x @` to `x get-global` etc.
+        // Narrow: `SYMBOL: <mangled>` defines the user word as a
+        // parser-level word that pushes the symbol itself when
+        // executed.  `try_emit_narrow_sink` mangles its references
+        // identically (`x @` → `<mangled> get-global`), so the def
+        // and refs always agree.
         write!(out,
             "SYMBOL: {n}\n0 {n} set-global",
-            n = v.name).unwrap();
+            n = n).unwrap();
     } else {
-        // Wide: hidden SYMBOL holds the one nf-addr; user-visible
-        // word returns it.
+        // Wide: hidden `nf-var-<raw>` SYMBOL holds the one nf-addr
+        // (a private storage handle, no collision risk, kept raw for
+        // diagnosability).  The user-visible reader is mangled.
         write!(out,
-            "SYMBOL: nf-var-{n}\n<variable> nf-var-{n} set-global\n: {n} ( -- addr ) nf-var-{n} get-global ; inline",
-            n = v.name).unwrap();
+            "SYMBOL: nf-var-{raw}\n<variable> nf-var-{raw} set-global\n: {n} ( -- addr ) nf-var-{raw} get-global ; inline",
+            n = n, raw = lc).unwrap();
     }
 }
 
@@ -414,17 +418,22 @@ fn emit_value_seed(v: &ValueDef, r: &Sema, out: &mut String) {
 /// only own slots are listed there; Factor's tuple system fills in
 /// inheritance.
 fn emit_class(c: &super::ast::ClassDef, r: &Sema, out: &mut String) {
-    let n = c.name.to_ascii_lowercase();
+    let n  = c.name.to_ascii_lowercase();
+    let mn = super::resolve::factor_user_name(&n);          // mangled class name
     let empty: Vec<String> = Vec::new();
+    // class_slots is keyed by the RAW lowercased name — that's what
+    // resolve registered.  All other emissions are mangled.
     let all_slots = r.class_slots.get(&n).unwrap_or(&empty);
-    // TUPLE: name [< parent] { slot } ... ;
-    // The TUPLE: form only lists THIS class's own slots; parent
-    // slots come via the `< parent` clause.
+    // TUPLE: <mangled> [< <mangled-parent>] { slot } ... ;
+    // Slot names are NOT mangled: they're internal to the TUPLE and
+    // shared by Factor's auto-generated `>>x` / `x>>` accessors,
+    // which our accessor wrappers call by their raw name.
     out.push_str("TUPLE: ");
-    out.push_str(&n);
+    out.push_str(&mn);
     if let Some(parent) = &c.extends {
+        let mp = super::resolve::factor_user_name(&parent.to_ascii_lowercase());
         out.push_str(" < ");
-        out.push_str(&parent.to_ascii_lowercase());
+        out.push_str(&mp);
     }
     for s in &c.slots {
         out.push_str(" { ");
@@ -432,33 +441,33 @@ fn emit_class(c: &super::ast::ClassDef, r: &Sema, out: &mut String) {
         out.push_str(" }");
     }
     out.push_str(" ;\n");
-    // Constructor: <name> ( s1 s2 ... -- p ) name boa ; inline
-    // The constructor consumes ALL slots in flattened order
-    // (parent first), which is what `boa` expects.
-    out.push_str(": <");
-    out.push_str(&n);
-    out.push_str("> ( ");
+    // Constructor name is the FULL `<n>` string mangled (so it
+    // matches what resolve produces for a `<point>` call — `z-` goes
+    // to the front of the whole synth name, not between `<` and `n`).
+    let ctor = super::resolve::factor_user_name(&format!("<{n}>"));
+    out.push_str(": ");
+    out.push_str(&ctor);
+    out.push_str(" ( ");
     for s in all_slots {
         out.push_str(s);
         out.push(' ');
     }
     out.push_str("-- p ) ");
-    out.push_str(&n);
+    out.push_str(&mn);
     out.push_str(" boa ; inline\n");
-    // Per-slot accessors for every slot the instance has, including
-    // inherited ones.  Factor's accessor primitives (slot>> and
-    // >>slot) are defined on the slot name globally — they work on
-    // any tuple that has a slot of that name — so the auto-generated
-    // wrappers compose with inheritance transparently.
-    //
-    // Three words per slot:
-    //   {n}>{sn}    ( p -- v )    getter
-    //   {sn}>>{n}   ( p v -- p )  chainable setter (returns object)
-    //   {n}.{sn}!   ( v p -- )    ANS-flavoured store (drops object)
+    // Per-slot accessor wrappers.  The wrapper word names are full
+    // synth strings (`point>x`, `x>>point`, `point.x!`) mangled as
+    // single units — same strings resolve produces for callers.  The
+    // bodies call Factor's auto-generated `{sn}>>` / `>>{sn}` slot
+    // accessors directly (raw — those are Factor's, keyed on slot
+    // name globally; they compose with inheritance transparently).
     for sn in all_slots {
-        write!(out, ": {n}>{sn} ( p -- v ) {sn}>> ; inline\n").unwrap();
-        write!(out, ": {sn}>>{n} ( p v -- p ) >>{sn} ; inline\n").unwrap();
-        write!(out, ": {n}.{sn}! ( v p -- ) swap >>{sn} drop ; inline\n").unwrap();
+        let g  = super::resolve::factor_user_name(&format!("{n}>{sn}"));
+        let cs = super::resolve::factor_user_name(&format!("{sn}>>{n}"));
+        let st = super::resolve::factor_user_name(&format!("{n}.{sn}!"));
+        write!(out, ": {g} ( p -- v ) {sn}>> ; inline\n").unwrap();
+        write!(out, ": {cs} ( p v -- p ) >>{sn} ; inline\n").unwrap();
+        write!(out, ": {st} ( v p -- ) swap >>{sn} drop ; inline\n").unwrap();
     }
 }
 
@@ -473,10 +482,18 @@ fn emit_generic(
     aux: &std::collections::BTreeSet<String>,
     out: &mut String,
 ) {
-    let n = g.name.to_ascii_lowercase();
+    // Generic name is mangled at the BASE; the `:primary` / `:before`
+    // / `:after` shadows append to the mangled base (so `cmp` becomes
+    // `z-cmp` and the primary shadow becomes `z-cmp:primary`).
+    // `emit_method` constructs the same target the same way.
+    //
+    // `raw_lc` stays for the `aux_generics` lookup (the set is keyed
+    // by raw names — methods register raw, generics register raw too).
+    let raw_lc = g.name.to_ascii_lowercase();
+    let n      = super::resolve::factor_user_name(&raw_lc);
     let n_in = g.effect.inputs.len();
     let n_out = g.effect.outputs.len();
-    let has_aux = aux.contains(&n);
+    let has_aux = aux.contains(&raw_lc);
 
     if !has_aux {
         // Plain generic — no wrapper, no shadows.  Fast path.
@@ -633,9 +650,14 @@ fn emit_specializer_list(m: &super::ast::MethodDef, out: &mut String) {
         out.push_str("object ");
     } else {
         for pos in 0..n_inputs {
+            // Specialised slots → mangled user-class name (so it
+            // matches the `TUPLE: <mangled>` emit_class wrote).
+            // Unspecialised slots → bare `object`, Factor's universal
+            // class — must NOT be mangled.
             let cls = m.specializers.iter()
                 .find(|s| s.position as usize == pos)
-                .map(|s| s.class_name.to_ascii_lowercase())
+                .map(|s| super::resolve::factor_user_name(
+                    &s.class_name.to_ascii_lowercase()))
                 .unwrap_or_else(|| "object".to_string());
             out.push_str(&cls);
             out.push(' ');
@@ -650,7 +672,11 @@ fn emit_method(
     aux: &std::collections::BTreeSet<String>,
     out: &mut String,
 ) {
+    // `g_lc` (raw) feeds the aux lookup; `mg` (mangled) is the
+    // emitted target — built the same way `emit_generic` writes the
+    // shadows so primary/before/after methods attach correctly.
     let g_lc = m.generic_name.to_ascii_lowercase();
+    let mg   = super::resolve::factor_user_name(&g_lc);
     // Route based on method kind:
     //   - Primary methods attach to `gname:primary` when the generic
     //     has aux methods this compile (so the wrapper finds them),
@@ -661,10 +687,10 @@ fn emit_method(
     let has_aux = aux.contains(&g_lc);
     let target = match m.kind {
         super::ast::MethodKind::Primary => {
-            if has_aux { format!("{g_lc}:primary") } else { g_lc.clone() }
+            if has_aux { format!("{mg}:primary") } else { mg.clone() }
         }
-        super::ast::MethodKind::Before => format!("{g_lc}:before"),
-        super::ast::MethodKind::After  => format!("{g_lc}:after"),
+        super::ast::MethodKind::Before => format!("{mg}:before"),
+        super::ast::MethodKind::After  => format!("{mg}:after"),
     };
     // multi-methods syntax: `METHOD: generic { class1 class2 ... }
     // body ;`.  Generic name first, then the class list as a
@@ -785,13 +811,14 @@ fn emit_see(name: &str, r: &Sema, out: &mut String) {
 /// elements are known-typed and access patterns are recognisable
 /// — that's a M2.9b+ task.
 fn emit_collection(cl: &CollectionDef, out: &mut String) {
-    let n = &cl.name;
+    let raw = cl.name.to_ascii_lowercase();
+    let n   = super::resolve::factor_user_name(&raw);   // user-visible reader
     let elt_size = cl.kind.elt_size();
     let total_bytes = cl.count.saturating_mul(elt_size).max(1);
     let multiplier = elt_size;  // accessor multiplies idx by this
     write!(out,
-        "SYMBOL: nf-coll-{n}\n{total_bytes} <buffer> nf-coll-{n} set-global\n: {n} ( idx -- addr ) nf-coll-{n} get-global swap {multiplier} * forth.runtime:nf-addr+ ; inline",
-        n = n, total_bytes = total_bytes, multiplier = multiplier,
+        "SYMBOL: nf-coll-{raw}\n{total_bytes} <buffer> nf-coll-{raw} set-global\n: {n} ( idx -- addr ) nf-coll-{raw} get-global swap {multiplier} * forth.runtime:nf-addr+ ; inline",
+        n = n, raw = raw, total_bytes = total_bytes, multiplier = multiplier,
     ).unwrap();
 }
 
@@ -806,11 +833,12 @@ fn emit_collection(cl: &CollectionDef, out: &mut String) {
 ///   - Everything else passes through verbatim via `emit_expr`,
 ///     so cells/chars/@/!/etc. work normally.
 fn emit_template_instance(ti: &TemplateInstanceDef, out: &mut String) {
-    let n = &ti.name;
+    let raw = ti.name.to_ascii_lowercase();
+    let n   = super::resolve::factor_user_name(&raw);   // user-visible accessor
     let bytes = ti.allocated_bytes.max(1);
     write!(out,
-        "SYMBOL: nf-tmpl-{n}\n{bytes} <buffer> nf-tmpl-{n} set-global\n: {n} ( idx -- addr ) nf-tmpl-{n} get-global ",
-        n = n, bytes = bytes,
+        "SYMBOL: nf-tmpl-{raw}\n{bytes} <buffer> nf-tmpl-{raw} set-global\n: {n} ( idx -- addr ) nf-tmpl-{raw} get-global ",
+        n = n, raw = raw, bytes = bytes,
     ).unwrap();
     emit_does_body(&ti.does_body, out);
     write!(out, " ; inline").unwrap();
@@ -890,11 +918,12 @@ fn emit_does_word(name: &str, out: &mut String) {
 /// up a runtime-action quotation.  For now CREATE without DOES>
 /// just exposes the address.
 fn emit_create(cd: &CreateDef, out: &mut String) {
-    let n = &cd.name;
+    let raw = cd.name.to_ascii_lowercase();
+    let n   = super::resolve::factor_user_name(&raw);   // user-visible reader
     let bytes = cd.allotted_bytes.max(1); // 0-byte buffers aren't useful
     write!(out,
-        "SYMBOL: nf-create-{n}\n{bytes} <buffer> nf-create-{n} set-global\n: {n} ( -- addr ) nf-create-{n} get-global ; inline",
-        n = n, bytes = bytes,
+        "SYMBOL: nf-create-{raw}\n{bytes} <buffer> nf-create-{raw} set-global\n: {n} ( -- addr ) nf-create-{raw} get-global ; inline",
+        n = n, raw = raw, bytes = bytes,
     ).unwrap();
 }
 
@@ -909,16 +938,17 @@ fn emit_create(cd: &CreateDef, out: &mut String) {
 /// inline bodies to the same machine code as the literal form,
 /// so there's no runtime cost.
 fn emit_constant(c: &ConstantDef, r: &Sema, out: &mut String) {
+    let n = super::resolve::factor_user_name(&c.name.to_ascii_lowercase());
     match &c.value {
         ConstValue::Int(v) => {
-            write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
+            write!(out, "CONSTANT: {n} {v}").unwrap();
         }
         ConstValue::Float(v) => {
             // Force decimal point so Factor parses as float, not int.
             if v.fract() == 0.0 && v.is_finite() {
-                write!(out, "CONSTANT: {} {:.1}", c.name, v).unwrap();
+                write!(out, "CONSTANT: {n} {v:.1}").unwrap();
             } else {
-                write!(out, "CONSTANT: {} {}", c.name, v).unwrap();
+                write!(out, "CONSTANT: {n} {v}").unwrap();
             }
         }
         ConstValue::Computed(exprs) => {
@@ -930,7 +960,7 @@ fn emit_constant(c: &ConstantDef, r: &Sema, out: &mut String) {
                 ConstFlavour::Float => "f",
                 ConstFlavour::Cell  => "n",
             };
-            write!(out, ": {} ( -- {} ) ", c.name, out_name).unwrap();
+            write!(out, ": {n} ( -- {out_name} ) ").unwrap();
             emit_exprs(exprs, r, out);
             write!(out, " ; inline").unwrap();
         }
@@ -1126,22 +1156,26 @@ fn try_emit_narrow_sink(
         return None;
     }
     let next_lc = next_name.to_ascii_lowercase();
+    // Mangled name: must match the SYMBOL the narrow `emit_variable`
+    // wrote out, so a `x @` peephole and the `SYMBOL: <mangled>` def
+    // are spelt the same.
+    let n = super::resolve::factor_user_name(&var_lc);
     match next_lc.as_str() {
         "@" | "c@" => {
-            write!(out, "{var_name} get-global").unwrap();
+            write!(out, "{n} get-global").unwrap();
             Some(2)
         }
         "!" | "c!" => {
-            write!(out, "{var_name} set-global").unwrap();
+            write!(out, "{n} set-global").unwrap();
             Some(2)
         }
         "+!" => {
             // ANS `value var +!` ⇒ var := var + value.
-            // Emitting `{var_name} get-global + {var_name} set-global` avoids 
+            // Emitting `{n} get-global + {n} set-global` avoids
             // `change-global`'s strict nominal stack effect `( variable quot -- )`
-            // which confuses Factor's inference in IF branches when the quot consumes 
+            // which confuses Factor's inference in IF branches when the quot consumes
             // a value from under the scope.
-            write!(out, "{var_name} get-global + {var_name} set-global").unwrap();
+            write!(out, "{n} get-global + {n} set-global").unwrap();
             Some(2)
         }
         _ => None,
@@ -1496,16 +1530,21 @@ mod tests {
     #[test]
     fn simple_definition_emits_colon() {
         let out = compile_str(": square ( n -- n^2 ) dup * ;");
-        assert!(out.contains(": square ( n -- n^2 ) dup * ;"),
-                "expected canonical colon def in {out:?}");
+        // User word names are mangled with the reserved `z-` prefix so
+        // they can't collide with anything in Factor's USING — see
+        // resolve::USER_NAME_PREFIX.
+        assert!(out.contains(": z-square ( n -- n^2 ) dup * ;"),
+                "expected mangled colon def in {out:?}");
     }
 
     #[test]
     fn user_word_call_after_def() {
         let out = compile_str(": square ( n -- n^2 ) dup * ; 5 square .");
-        // square def + top-level "5 square forth.runtime:."
-        assert!(out.contains(": square"));
-        assert!(out.contains("5 square forth.runtime:."));
+        // Definition is mangled, and the caller-side reference is
+        // mangled identically — that's the whole point of routing
+        // both through `factor_user_name`.
+        assert!(out.contains(": z-square"));
+        assert!(out.contains("5 z-square forth.runtime:."));
     }
 
     #[test]

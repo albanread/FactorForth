@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::parser::{BinOp, Expr, LetForm};
+use super::super::resolve::factor_user_name;
 
 /// Produce Factor IR text for a LET form.  Returns the
 /// `[| inputs | ... ] call( ... )` block as a string ready to
@@ -82,11 +83,15 @@ pub fn lower_to_factor(
             }
             for (i, alias) in d.slots.iter().enumerate() {
                 let actual_slot = &actual[i];
+                // The `class>slot` getter we emit must use the same
+                // mangled name `emit_class` wrote for the accessor
+                // (`z-point>x`, etc.), so the LET-side destructure
+                // resolves to the same word.
+                let acc = factor_user_name(&format!("{cls}>{actual_slot}"));
                 let _ = write!(out,
-                    "{name} {cls}>{actual} :> {alias_local} ",
+                    "{name} {acc} :> {alias_local} ",
                     name = factor_local(&inp.name),
-                    cls = cls,
-                    actual = actual_slot,
+                    acc = acc,
                     alias_local = factor_local(alias),
                 );
             }

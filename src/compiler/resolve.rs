@@ -787,28 +787,43 @@ fn resolve_exprs(
     Ok(())
 }
 
-/// Mangle an ANS word name into a Factor-safe identifier.  Most ANS
-/// names are already valid Factor identifiers (`square`, `mb-row`,
-/// `dup`).  We forward-map the few that aren't and lowercase the
-/// rest.  ANS case-insensitivity → lowercase canonical form.
+/// Reserved prefix attached to every user-defined name in the emitted
+/// Factor IR.  Picked to be bulletproof against vocab collisions: no
+/// Factor word starts with `z-`, and the separator-character makes it
+/// not-clever — we never have to reason about what `USING:` happens
+/// to pull in, even if `sequences` / `sorting` show up later.
+/// One-line change if we ever want a different scheme.
+pub(crate) const USER_NAME_PREFIX: &str = "z-";
+
+/// Mangle an ANS word name into a Factor-safe identifier.  This is
+/// **the single chokepoint** every emit site routes through — and
+/// the resolver hands the same mangled name back for caller-side
+/// references — so a definition and its references always agree.
 ///
-/// Currently no mangling beyond lowercasing is needed for any name
-/// the milestone uses.  When ANS-reserved tokens like `!` start
-/// appearing as user-defined names, this is where the rename
-/// happens.
+/// Two jobs in order:
+///
+///   1. Rewrite any ANS identifier that breaks Factor's parser
+///      (`->` is the locals-arrow inside `::` defs, `}t` / `t{` are
+///      flaky `}`-prefixed parser tokens) to a safe spelling.
+///   2. Prefix every name with [`USER_NAME_PREFIX`] so it can never
+///      collide with a Factor vocabulary word — `compare` becomes
+///      `z-compare`, `area` becomes `z-area`, `<point>` becomes
+///      `z-<point>`, and so on.  The IR is machine-only; the user
+///      keeps writing the ANS name.
+///
+/// Names that are **not** user-defined — slot names embedded in
+/// TUPLE: declarations, Factor's own `>>x` / `x>>` accessors, `boa`,
+/// the `object` catch-all in specializer lists, and qualified
+/// builtins like `kernel:dup` — are emitted raw at their source sites
+/// and do not pass through here.
 pub(crate) fn factor_user_name(ans_lc: &str) -> String {
-    // Some ANS-valid identifiers collide with Factor's parser — `->`
-    // is a locals-arrow inside `::` definitions, `?dup`'s issues
-    // we've documented separately, etc.  Mangle the problem cases
-    // to safe alternative spellings so the emitted IR parses.
-    // User source still writes the ANS name; the resolver hands
-    // the mangled name to the emit layer.
-    match ans_lc {
-        "->"      => "nf-arrow".to_string(),
-        "}t"      => "nf-end-test".to_string(),  // }-prefixed names also flaky
-        "t{"      => "nf-begin-test".to_string(),
-        _         => ans_lc.to_string(),
-    }
+    let safe = match ans_lc {
+        "->" => "arrow",
+        "}t" => "end-test",
+        "t{" => "begin-test",
+        other => other,
+    };
+    format!("{USER_NAME_PREFIX}{safe}")
 }
 
 // (vocabs_needed moved to emit.rs as part of the sema refactor —
@@ -845,10 +860,13 @@ mod tests {
     #[test]
     fn user_defined_resolves() {
         let r = resolve_str(": square dup * ; 5 square").unwrap();
-        // The `square` call at top level must resolve to user-defined.
+        // The `square` call at top level must resolve to user-defined,
+        // and the factor_name must be the mangled form so it lines up
+        // with the mangled definition the emitter writes.
+        let expected = factor_user_name("square");
         let found = r.word_targets.values()
-            .any(|t| matches!(t, Target::UserDefined { factor_name } if factor_name == "square"));
-        assert!(found, "expected square to resolve as UserDefined");
+            .any(|t| matches!(t, Target::UserDefined { factor_name } if factor_name == &expected));
+        assert!(found, "expected square to resolve as UserDefined with mangled name {expected:?}");
     }
 
     #[test]
