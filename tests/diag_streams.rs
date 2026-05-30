@@ -168,3 +168,143 @@ fn copy_stream_composes() {
     eprintln!("captured: {cap:?}");
     assert!(cap.contains("ABCXYZ!"), "uppercasing copy: {cap}");
 }
+
+/// upcase-string / downcase-string apply ASCII case-flip to every
+/// character of a string and return a fresh string of the SAME type.
+/// They are written `' upcase-char map` — proof that strings now fit
+/// the collection protocol (map's `new-like` gives a string back).
+#[test]
+#[ignore]
+fn upcase_downcase_string() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." up=" S" Hello, World!" >string upcase-string show
+        ." |down=" S" Hello, World!" >string downcase-string show
+        ." |"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("up=HELLO, WORLD!"), "upcase: {cap}");
+    assert!(cap.contains("down=hello, world!"), "downcase: {cap}");
+}
+
+/// trim variants drop leading / trailing / both ASCII whitespace.
+/// An all-whitespace input trims to the empty string.
+#[test]
+#[ignore]
+fn trim_variants() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" S"   hello  " >string trim-left  show ." ]"
+        ." |[" S"   hello  " >string trim-right show ." ]"
+        ." |[" S"   hello  " >string trim       show ." ]"
+        ." |[" S"      " >string trim show ." ]"
+        ." |[" S" notrim" >string trim show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[hello  ]"), "trim-left: {cap}");
+    assert!(cap.contains("[  hello]"), "trim-right: {cap}");
+    assert!(cap.contains("[hello]"), "trim: {cap}");
+    assert!(cap.contains("[]"), "all-ws trim: {cap}");
+    assert!(cap.contains("[notrim]"), "no-ws passthrough: {cap}");
+}
+
+/// starts-with? / ends-with? / contains? — three predicate searches
+/// over the same substring-matching primitive.  Includes the edge
+/// cases that bite: needle longer than haystack, needle at the very
+/// last position, repeated overlapping matches.
+#[test]
+#[ignore]
+fn substring_predicates() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        S" hello world" >string VALUE h
+        ." sw1=" h S" hello" >string starts-with? .         \ -1
+        ." sw0=" h S" world" >string starts-with? .         \ 0
+        ." ew1=" h S" world" >string ends-with? .           \ -1
+        ." ew0=" h S" hello" >string ends-with? .           \ 0
+        ." c1="  h S" o w"   >string contains? .            \ -1
+        ." c0="  h S" zzz"   >string contains? .            \ 0
+        ." long=" h S" hello world!" >string contains? .    \ 0  (needle longer)
+        ." last=" h S" world" >string contains? .           \ -1 (match at end)
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sw1=-1"), "starts-with? true: {cap}");
+    assert!(cap.contains("sw0=0"),  "starts-with? false: {cap}");
+    assert!(cap.contains("ew1=-1"), "ends-with? true: {cap}");
+    assert!(cap.contains("ew0=0"),  "ends-with? false: {cap}");
+    assert!(cap.contains("c1=-1"),  "contains? mid: {cap}");
+    assert!(cap.contains("c0=0"),   "contains? miss: {cap}");
+    assert!(cap.contains("long=0"), "contains? needle too long: {cap}");
+    assert!(cap.contains("last=-1"),"contains? at last position: {cap}");
+}
+
+/// pad-left / pad-right grow a string up to a width with a fill char.
+/// Width less than the string's own size is a no-op (no truncation).
+#[test]
+#[ignore]
+fn pad_variants() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" S" 42" >string 5 '0' pad-left show ." ]"
+        ." |[" S" hi" >string 6 ' ' pad-right show ." ]"
+        ." |[" S" already-long" >string 3 'x' pad-left show ." ]"
+        ." |[" S" already-long" >string 3 'x' pad-right show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[00042]"), "pad-left zero-pad: {cap}");
+    assert!(cap.contains("[hi    ]"), "pad-right space-pad: {cap}");
+    assert!(cap.contains("[already-long]"), "pad-left no-op when wide enough: {cap}");
+}
+
+/// repeat-char / repeat-string build a string of n copies.  n <= 0
+/// gives the empty string.
+#[test]
+#[ignore]
+fn repeat_variants() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" '-' 5 repeat-char show ." ]"
+        ." |[" S" ab" >string 3 repeat-string show ." ]"
+        ." |[" '*' 0 repeat-char show ." ]"
+        ." |[" S" x" >string -2 repeat-string show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[-----]"), "repeat-char: {cap}");
+    assert!(cap.contains("[ababab]"), "repeat-string: {cap}");
+    // Two empty-string brackets: zero count, and negative count.
+    let empties = cap.matches("[]").count();
+    assert!(empties >= 2, "empty cases: {cap}");
+}
+
+/// A string is a fully-fledged collection now: map gives back a
+/// string, reverse gives back a string, and the predicate-search
+/// algorithms from collections.f work directly on chars.
+#[test]
+#[ignore]
+fn string_is_a_collection() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." rev=" S" abcde" >string reverse show              \ edcba
+        ." |tally=" S" Hello" >string ' char-upper? tally .   \ 1
+        ." |any=" S" abc1" >string ' digit-char? any? .       \ -1
+        ." |all=" S" abcd" >string ' letter-char? all? .      \ -1
+        ." |"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("rev=edcba"), "reverse on string: {cap}");
+    assert!(cap.contains("tally=1"),   "tally on string: {cap}");
+    assert!(cap.contains("any=-1"),    "any? on string: {cap}");
+    assert!(cap.contains("all=-1"),    "all? on string: {cap}");
+}

@@ -92,6 +92,18 @@ METHOD: write-char ( ch w:string-writer -- )
     r@ append-into
     r> ;
 
+\ A string is a writable, growable collection too — `new-like` returns
+\ a fresh empty string of the same shape, and `at!` delegates to the
+\ inner darray.  This is what lets `map` over a string return a string
+\ (not a darray of char codes), and what lets `reverse` and the other
+\ shape-preserving algorithms work on strings as on any other
+\ collection.  `new-like`'s body inlines `new-string`'s expansion
+\ (`new-darray <string>`) because methods are emitted before colon
+\ defs in the same translation unit, so a forward reference would
+\ fail at Factor parse time.
+METHOD: new-like ( s:string -- d )  drop new-darray <string> ;
+METHOD: at! ( v i s:string -- )     string>chars at! ;
+
 \ ── streams ──────────────────────────────────────────────────────
 : <reader> ( buf -- s )  0 <string-reader> ;
 : <writer> ( -- w )      new-darray <string-writer> ;
@@ -181,3 +193,138 @@ METHOD: write-char ( ch w:string-writer -- )
 
 \ Drain an input stream into a fresh writer and return it.
 : read-all ( in -- w )  <writer> dup >r copy-stream r> ;
+
+\ ── Text utilities ────────────────────────────────────────────────
+\
+\ A small kit of string-manipulation words that every Forth user
+\ reaches for.  Everything here builds on the collection protocol
+\ (size / at / new-like / at!) plus the ASCII character predicates
+\ from core.f.  Each word leaves the input untouched and returns a
+\ FRESH string — there is no in-place mutation API here.
+\
+\ Names that read like Forth (rather than Factor): `upcase-string` /
+\ `downcase-string` (paralleling Layer 0's char versions), `trim-left`
+\ / `trim-right` / `trim`, `starts-with?` / `ends-with?` /
+\ `contains?`, `pad-left` / `pad-right`, `repeat-char` /
+\ `repeat-string`.
+
+\ subseq ( s start end -- t ) — chars from start (inclusive) to end
+\ (exclusive) as a fresh string.  Caller clamps; out-of-range slices
+\ would error in `at`.  Used internally by trim and friends.
+: subseq ( s start end -- t ) {: s start end :}
+    new-string {: dst :}
+    end start ?do
+        i s at  dst string-push
+    loop
+    dst ;
+
+\ upcase-string / downcase-string — whole-string ASCII case-flip.
+\ `map` returns a string here because `new-like` on a string is a
+\ string (the methods we added above) — so the result class matches.
+: upcase-string   ( s -- t )  ' upcase-char   map ;
+: downcase-string ( s -- t )  ' downcase-char map ;
+
+\ skip-ws-left / skip-ws-right — cursor helpers used by the trim
+\ variants.  Each walks past contiguous whitespace and returns the
+\ resting index.  Kept separate so the cursor logic is named and
+\ obvious, and so the trims read top-down.
+: skip-ws-left ( s i -- i' ) {: s i :}
+    \ from index i, advance while inside the string AND on whitespace.
+    \ Both args bind so the cursor logic reads with names; i is pushed
+    \ back onto the data stack and walked there.
+    i
+    begin
+        dup s size < if  dup s at whitespace-char?  else 0 then
+    while
+        1+
+    repeat ;
+
+: skip-ws-right ( s i -- i' ) {: s i :}
+    \ from index i, retreat while i > 0 AND s[i-1] is whitespace.
+    \ Returns the exclusive end of the non-WS prefix.
+    i
+    begin
+        dup 0 > if  dup 1- s at whitespace-char?  else 0 then
+    while
+        1-
+    repeat ;
+
+: trim-left  ( s -- t ) {: s :}
+    s 0 skip-ws-left  {: start :}
+    s start s size subseq ;
+
+: trim-right ( s -- t ) {: s :}
+    s s size skip-ws-right  {: end :}
+    s 0 end subseq ;
+
+: trim ( s -- t ) {: s :}
+    s 0 skip-ws-left  {: start :}
+    s s size skip-ws-right  {: end :}
+    end start < if
+        new-string                                  \ all whitespace
+    else
+        s start end subseq
+    then ;
+
+\ substring-at? ( s pos needle -- ? ) — does needle appear in s at
+\ offset pos?  The bounds check up front lets the loop assume every
+\ index it touches is in range.  Used by contains? and ends-with?.
+: substring-at? ( s pos needle -- ? ) {: s pos needle :}
+    pos needle size + s size > if
+        0
+    else
+        -1
+        needle size 0 ?do
+            i needle at  i pos + s at  =  and
+        loop
+    then ;
+
+: starts-with? ( s prefix -- ? ) {: s prefix :}
+    s 0 prefix substring-at? ;
+
+: ends-with? ( s suffix -- ? ) {: s suffix :}
+    s size suffix size - {: off :}
+    off 0 < if  0  else  s off suffix substring-at?  then ;
+
+\ contains? ( s needle -- ? ) — does needle appear anywhere in s?
+\ Empty needle is vacuously contained (matches at every offset, but
+\ the loop still terminates because we OR every result together).
+: contains? ( s needle -- ? ) {: s needle :}
+    needle size s size > if
+        0
+    else
+        0                                           \ found accumulator
+        s size needle size - 1+  0 ?do
+            s i needle substring-at?  or
+        loop
+    then ;
+
+\ pad-left / pad-right ( s n ch -- t ) — return a string of width
+\ max(n, s size) with ch padding the short side.  Clamps so n smaller
+\ than s.size is a no-op (the input flows through unchanged).
+: pad-left ( s n ch -- t ) {: s n ch :}
+    new-string {: dst :}
+    n s size - 0 max 0 ?do  ch dst string-push  loop
+    s size 0 ?do  i s at  dst string-push  loop
+    dst ;
+
+: pad-right ( s n ch -- t ) {: s n ch :}
+    new-string {: dst :}
+    s size 0 ?do  i s at  dst string-push  loop
+    n s size - 0 max 0 ?do  ch dst string-push  loop
+    dst ;
+
+\ repeat-char ( ch n -- s ) — a string of n copies of ch.
+\ repeat-string ( s n -- t ) — a string of n copies of s concatenated.
+\ Both clamp non-positive n to the empty string.
+: repeat-char ( ch n -- s ) {: ch n :}
+    new-string {: dst :}
+    n 0 max 0 ?do  ch dst string-push  loop
+    dst ;
+
+: repeat-string ( s n -- t ) {: s n :}
+    new-string {: dst :}
+    n 0 max 0 ?do
+        s size 0 ?do  i s at  dst string-push  loop
+    loop
+    dst ;
