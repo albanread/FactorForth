@@ -496,6 +496,54 @@ xs ' even? partition     \ stack: yes no   (use TO to bind both)
 
 ---
 
+## Set algebra
+
+The unique-value sets from Layer 1 get the standard algebraic
+operations.  All four return a **fresh** set; the inputs are
+untouched.  Membership tests use `set-has?` (hash-backed), so each
+operation is linear in its scanning input.
+
+| word              | stack effect    | result                                  |
+|-------------------|-----------------|-----------------------------------------|
+| `set-union`       | `( a b -- c )`  | every element in `a` OR `b`             |
+| `set-intersect`   | `( a b -- c )`  | every element in `a` AND `b`            |
+| `set-difference`  | `( a b -- c )`  | elements in `a` but NOT in `b`          |
+| `subset?`         | `( a b -- ? )`  | true iff every element of `a` is in `b` |
+| `set-each`        | `( s xt -- )`   | run `xt ( x -- )` over each member      |
+
+```forth
+new-set VALUE a
+new-set VALUE b
+1 a set-add  2 a set-add  3 a set-add
+2 b set-add  3 b set-add  4 b set-add
+
+a b set-union     size .       \ 4   {1,2,3,4}
+a b set-intersect size .       \ 2   {2,3}
+a b set-difference size .      \ 1   {1}
+a b subset? .                  \ 0   (1 is in a but not b)
+```
+
+## Walking a dict's entries
+
+`dict-each` runs an xt over every `( key value )` pair.  It iterates
+through a `dict-keys` snapshot, so the xt is free to mutate `d`
+without invalidating the loop.
+
+| word        | stack effect       | xt              | what it does                |
+|-------------|--------------------|-----------------|-----------------------------|
+| `dict-each` | `( d xt -- )`      | `( k v -- )`    | run xt on every entry       |
+
+```forth
+new-dict VALUE d
+100 1 d dict-set  200 2 d dict-set  300 3 d dict-set
+0 VALUE total
+: weigh ( k v -- )  + total + TO total ;
+d ' weigh dict-each
+total .                  \ 606   ( (1+100) + (2+200) + (3+300) )
+```
+
+---
+
 ## Extending the protocol
 
 To make your own class a collection, implement the four generics. Once

@@ -823,6 +823,117 @@ fn concat_appends_into_a_fresh_darray() {
         "concat preserves order: {cap}");
 }
 
+// ── Round 4: set algebra + dict iteration ────────────────────────
+
+#[test]
+#[ignore]
+fn set_union_intersect_difference() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-set VALUE a
+        new-set VALUE b
+        1 a set-add  2 a set-add  3 a set-add
+        2 b set-add  3 b set-add  4 b set-add
+        \ union {1,2,3,4} — 4 elements
+        a b set-union VALUE u
+        ." u=" u size .
+        \ intersect {2,3} — 2 elements
+        a b set-intersect VALUE i
+        ." |i=" i size .
+        \ membership in intersect: 2 yes, 1 no, 4 no
+        ." |i2=" 2 i set-has? .
+        ." |i1=" 1 i set-has? .
+        \ a\b = {1} — 1 element
+        a b set-difference VALUE d
+        ." |d=" d size .
+        ." |d1=" 1 d set-has? .
+        ." |d2=" 2 d set-has? .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("u=4"), "union size: {cap}");
+    assert!(cap.contains("i=2"), "intersect size: {cap}");
+    assert!(cap.contains("i2=-1") && cap.contains("i1=0"),
+        "intersect membership: {cap}");
+    assert!(cap.contains("d=1") && cap.contains("d1=-1") && cap.contains("d2=0"),
+        "difference membership: {cap}");
+}
+
+#[test]
+#[ignore]
+fn subset_predicate() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-set VALUE big
+        1 big set-add  2 big set-add  3 big set-add  4 big set-add
+        new-set VALUE small
+        2 small set-add  3 small set-add
+        new-set VALUE mixed
+        2 mixed set-add  9 mixed set-add
+        new-set VALUE empty
+        ." s=" small big subset? .                  \ -1   small ⊆ big
+        ." |b=" big small subset? .                 \ 0    big NOT ⊆ small
+        ." |o=" mixed big subset? .                 \ 0    mixed has 9
+        ." |e=" empty big subset? .                 \ -1   empty ⊆ any
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("s=-1"), "small ⊆ big: {cap}");
+    assert!(cap.contains("b=0"), "big NOT ⊆ small: {cap}");
+    assert!(cap.contains("o=0"), "other (with 9) NOT ⊆ big: {cap}");
+    assert!(cap.contains("e=-1"), "empty ⊆ anything (vacuous): {cap}");
+}
+
+#[test]
+#[ignore]
+fn set_each_walks_members() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-set VALUE s
+        10 s set-add  20 s set-add  30 s set-add  40 s set-add
+        0 VALUE total
+        : add-total ( x -- )  total + TO total ;
+        s ' add-total set-each
+        ." sum=" total .                            \ 100
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sum=100"), "set-each sum of members: {cap}");
+}
+
+#[test]
+#[ignore]
+fn dict_each_visits_every_pair() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-dict VALUE d
+        100 1 d dict-set
+        200 2 d dict-set
+        300 3 d dict-set
+        \ Sum keys and values separately to verify the xt sees BOTH.
+        0 VALUE k-sum
+        0 VALUE v-sum
+        : tally-pair ( k v -- )
+            swap k-sum + TO k-sum                    \ ( v ) — added k
+            v-sum + TO v-sum ;                       \ added v
+        d ' tally-pair dict-each
+        ." k=" k-sum .                              \ 1+2+3 = 6
+        ." |v=" v-sum .                             \ 100+200+300 = 600
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("k=6"), "dict-each key sum: {cap}");
+    assert!(cap.contains("v=600"), "dict-each value sum: {cap}");
+}
+
 #[test]
 #[ignore]
 fn reverse_returns_new_collection_in_reverse() {

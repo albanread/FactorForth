@@ -529,3 +529,62 @@ VARIABLE srt-j
     cat-a size 0 ?do  i cat-a at  cat-dst d-push  loop
     cat-b size 0 ?do  i cat-b at  cat-dst d-push  loop
     cat-dst ;
+
+\ ── Set algebra ────────────────────────────────────────────────────
+\
+\ All four return a FRESH set; the inputs are untouched.  Membership
+\ tests use `set-has?` (hash-backed, O(1)) so each algorithm is
+\ linear in its scanning input.
+
+0 VALUE un-dst
+: (un-add) ( x -- )  un-dst set-add ;
+: set-union ( a b -- c )
+    new-set TO un-dst
+    set-members ' (un-add) each                    \ all of b
+    set-members ' (un-add) each                    \ then all of a
+    un-dst ;
+
+0 VALUE inter-dst
+0 VALUE inter-b
+: (inter-add) ( x -- )
+    dup inter-b set-has? if  inter-dst set-add  else  drop  then ;
+: set-intersect ( a b -- c )
+    TO inter-b
+    new-set TO inter-dst
+    set-members ' (inter-add) each
+    inter-dst ;
+
+0 VALUE diff-dst
+0 VALUE diff-b
+: (diff-add) ( x -- )
+    dup diff-b set-has? if  drop  else  diff-dst set-add  then ;
+: set-difference ( a b -- c )
+    TO diff-b
+    new-set TO diff-dst
+    set-members ' (diff-add) each
+    diff-dst ;
+
+0 VALUE sub-b
+: (in-sub-b?) ( x -- ? )  sub-b set-has? ;
+: subset? ( a b -- ? )
+    TO sub-b
+    set-members ' (in-sub-b?) all? ;
+
+\ Iteration shorthand for sets (sets aren't positionally indexable
+\ themselves, but their `set-members` darray is).
+: set-each ( s xt -- )  swap set-members swap each ;
+
+\ ── dict-each — iterate (key, value) pairs ─────────────────────────
+\
+\ The xt sees both halves of every entry.  Uses `dict-keys` (an O(n)
+\ snapshot) so it's safe against concurrent mutation of `d` from
+\ inside the xt body.
+
+0 VALUE de-d
+0 VALUE de-xt
+: (de-one) ( key -- )
+    dup de-d dict-at drop                          \ ( k v ) — found is guaranteed
+    de-xt call2 ;
+: dict-each ( d xt -- )
+    TO de-xt  TO de-d
+    de-d dict-keys ' (de-one) each ;
