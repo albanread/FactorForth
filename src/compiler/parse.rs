@@ -547,32 +547,7 @@ impl<'t> Parser<'t> {
             if w == "{:" {
                 let open_span = self.peek().unwrap().span;
                 self.bump();                     // consume `{:`
-                loop {
-                    self.skip_comments();
-                    let Some(t) = self.peek() else {
-                        return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                    };
-                    match &t.kind {
-                        Tok::Word(w) if w == ":}" => { self.bump(); break; }
-                        Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
-                            // Unterminated locals block — body started
-                            // before we saw `:}`.
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        }
-                        Tok::Word(name) => {
-                            let span = t.span;
-                            locals.push(LocalDecl { name: name.clone(), name_span: span });
-                            self.bump();
-                        }
-                        _ => {
-                            // Numbers, strings, etc. inside the locals
-                            // list are a syntax error.  Use the
-                            // unterminated-def error for now; refine
-                            // when we have a dedicated variant.
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        }
-                    }
-                }
+                locals = self.parse_locals_block(open_span)?;
             }
         }
 
@@ -594,37 +569,6 @@ impl<'t> Parser<'t> {
                     return Err(ParseError::NestedColon {
                         outer: colon_span, inner: t.span,
                     });
-                }
-                // Mid-body `{: name1 name2 :}` locals block.  Same
-                // shape as the head-of-body one, but it consumes from
-                // the data stack AT THIS POINT in the body and brings
-                // the names into scope for the rest of the body.
-                // Emitted as a chain of Factor `:>` bindings.
-                Tok::Word(w) if w == "{:" => {
-                    let open_span = t.span;
-                    self.bump();
-                    let mut names: Vec<LocalDecl> = Vec::new();
-                    loop {
-                        self.skip_comments();
-                        let Some(t) = self.peek() else {
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        };
-                        match &t.kind {
-                            Tok::Word(w) if w == ":}" => { self.bump(); break; }
-                            Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
-                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                            }
-                            Tok::Word(name) => {
-                                let span = t.span;
-                                names.push(LocalDecl { name: name.clone(), name_span: span });
-                                self.bump();
-                            }
-                            _ => {
-                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                            }
-                        }
-                    }
-                    body.push(Expr::Locals { names, span: open_span });
                 }
                 _ => {
                     let e = self.expr_one()?;
@@ -866,34 +810,13 @@ impl<'t> Parser<'t> {
             if w == "{:" {
                 let open_span = self.peek().unwrap().span;
                 self.bump();                         // consume `{:`
-                loop {
-                    self.skip_comments();
-                    let Some(t) = self.peek() else {
-                        return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                    };
-                    match &t.kind {
-                        Tok::Word(w) if w == ":}" => { self.bump(); break; }
-                        Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        }
-                        Tok::Word(name) => {
-                            let span = t.span;
-                            head_locals.push(LocalDecl { name: name.clone(), name_span: span });
-                            self.bump();
-                        }
-                        _ => {
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        }
-                    }
-                }
+                head_locals = self.parse_locals_block(open_span)?;
             }
         }
 
-        // Body until `;`.  Same `{:` mid-body handling as colon defs:
-        // a `{: name1 name2 :}` block anywhere in the body brings
-        // those names into scope for the rest of the body via
-        // Expr::Locals.  This is what lets METHOD: bodies use the `_`
-        // discard idiom (e.g. `{: _ :} ." <object>"`).
+        // Body until `;`.  Mid-body `{: … :}` blocks are handled by
+        // expr_one (the `"{:"` arm), so they work here and inside any
+        // nested control-flow without special-casing the body loop.
         let mut body: Vec<Expr> = Vec::new();
         let end_span;
         loop {
@@ -906,32 +829,6 @@ impl<'t> Parser<'t> {
                     end_span = t.span;
                     self.bump();
                     break;
-                }
-                Tok::Word(w) if w == "{:" => {
-                    let open_span = t.span;
-                    self.bump();
-                    let mut names: Vec<LocalDecl> = Vec::new();
-                    loop {
-                        self.skip_comments();
-                        let Some(t) = self.peek() else {
-                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                        };
-                        match &t.kind {
-                            Tok::Word(w) if w == ":}" => { self.bump(); break; }
-                            Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
-                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                            }
-                            Tok::Word(name) => {
-                                let span = t.span;
-                                names.push(LocalDecl { name: name.clone(), name_span: span });
-                                self.bump();
-                            }
-                            _ => {
-                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
-                            }
-                        }
-                    }
-                    body.push(Expr::Locals { names, span: open_span });
                 }
                 _ => {
                     let e = self.expr_one()?;
@@ -950,6 +847,35 @@ impl<'t> Parser<'t> {
             span: Span { start: kw_span.start, end: end_span.end },
             kind,
         })
+    }
+
+    /// Parse the name list inside a `{: … :}` locals block.  The
+    /// opening `{:` has already been consumed; this reads names until
+    /// `:}` and returns them.  Rejects `;`, `:`, or a nested `{:` as
+    /// an unterminated-definition error.
+    fn parse_locals_block(&mut self, open_span: Span) -> Result<Vec<LocalDecl>, ParseError> {
+        let mut names: Vec<LocalDecl> = Vec::new();
+        loop {
+            self.skip_comments();
+            let Some(t) = self.peek() else {
+                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+            };
+            match &t.kind {
+                Tok::Word(w) if w == ":}" => { self.bump(); break; }
+                Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
+                    return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                }
+                Tok::Word(name) => {
+                    let span = t.span;
+                    names.push(LocalDecl { name: name.clone(), name_span: span });
+                    self.bump();
+                }
+                _ => {
+                    return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                }
+            }
+        }
+        Ok(names)
     }
 
     /// Parse a single expression: literal, word-ref, or a structured
@@ -1065,6 +991,15 @@ impl<'t> Parser<'t> {
                             name,
                             span: Span { start: t_span.start, end },
                         })
+                    }
+                    // Mid-body `{: name1 name2 :}` locals block inside
+                    // any expression position — if/do/begin bodies,
+                    // case arms, anywhere.  Emitted as chained `:>`
+                    // bindings just like the top-level form.
+                    "{:" => {
+                        self.bump(); // consume `{:`
+                        let names = self.parse_locals_block(t_span)?;
+                        Ok(Expr::Locals { names, span: t_span })
                     }
                     // Terminators leaking through to here means they
                     // weren't inside a matching opener.

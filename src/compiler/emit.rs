@@ -1124,6 +1124,18 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
         emit_definition_with_locals(d, r, &factor_name, out);
         return;
     }
+    // Mid-body `{: :}` locals (no head locals, but `:>` inside control
+    // flow) need Factor's `::` for `:>` to work in nested quotations.
+    // We can't just use `::` with `( ..a -- ..b )` — Factor can't infer
+    // the quotation effects when the outer effect is polymorphic.
+    // Instead: use `::` with the declared inputs as head locals, then
+    // immediately push them all back to the stack (the "preamble").  The
+    // body then operates on the restored stack AND `:>` inside nested
+    // quotations is valid because the word is `::`.
+    if body_uses_locals(&d.body) {
+        emit_definition_mid_locals_only(d, r, &factor_name, out);
+        return;
+    }
     write!(out, ": {} ", factor_name).unwrap();
     // Factor's `:` REQUIRES a stack-effect annotation.  Picking
     // which one to emit follows the principle that synth is
@@ -1313,6 +1325,95 @@ fn emit_definition_with_locals(d: &Definition, r: &Sema, factor_name: &str, out:
     let _ = n_locals;
     out.push_str(") ");
     // Body emit + EXIT fallback wrap (identical to the non-locals path).
+    if super::lower_exit::body_uses_exit(&d.body, &r.word_targets) {
+        out.push_str("[ ");
+        emit_exprs(&d.body, r, out);
+        out.push_str(" ] continuations:with-return");
+    } else {
+        emit_exprs(&d.body, r, out);
+    }
+    out.push_str(" ;");
+}
+
+/// Emit a `:` definition that has NO head locals but DOES have mid-body
+/// `{: … :}` blocks inside control-flow branches.
+///
+/// The challenge: Factor only allows `:>` inside `::` words.  A plain
+/// `::` with the correct effect annotation would make Factor bind all
+/// inputs as head locals, leaving the body with an empty stack — but
+/// the body was written expecting the inputs on the stack (`dup`, etc.).
+///
+/// Solution — "preamble restore":
+///   1. Emit `:: name ( inputs -- outputs )` using the declared/synth
+///      effect inputs as head-local names.
+///   2. Immediately after the `(`, push every head local back onto the
+///      data stack, restoring the original stack layout.
+///   3. Emit the actual body verbatim.
+///
+/// This way the body operates on a correct data stack AND is inside a
+/// `::` scope, so `:>` bindings in nested quotations (`[ :> x … ]`)
+/// are accepted by Factor's compiler.
+fn emit_definition_mid_locals_only(d: &Definition, r: &Sema, factor_name: &str, out: &mut String) {
+    fn sanitize(s: &str) -> String {
+        if s == "..." { "_dots_".to_string() }
+        else if s.contains('.') { s.replace('.', "_") }
+        else { s.to_ascii_lowercase() }
+    }
+
+    let lc = d.name.to_ascii_lowercase();
+    let synth = r.body_effects.get(&lc).copied();
+
+    // Collect input names.  Priority: declared effect > synth count >
+    // row variables (last resort — Factor can't always check these).
+    let input_names: Vec<String> = if let Some(eff) = &d.effect {
+        eff.inputs.iter().map(|s| sanitize(s)).collect()
+    } else if let Some(super::effect::Effect::Known { inputs, .. }) = synth {
+        (0..inputs).map(|i| format!("_mi{i}")).collect()
+    } else {
+        // Synth unknown, no declaration: row variables, no preamble.
+        write!(out, ":: {factor_name} ( ..a -- ..b ) ").unwrap();
+        if super::lower_exit::body_uses_exit(&d.body, &r.word_targets) {
+            out.push_str("[ ");
+            emit_exprs(&d.body, r, out);
+            out.push_str(" ] continuations:with-return");
+        } else {
+            emit_exprs(&d.body, r, out);
+        }
+        out.push_str(" ;");
+        return;
+    };
+
+    // Emit `:: name ( input1 input2 … -- output1 … )`.
+    write!(out, ":: {factor_name} ( ").unwrap();
+    for name in &input_names {
+        out.push_str(name);
+        out.push(' ');
+    }
+    if input_names.is_empty() { out.push(' '); }
+    out.push_str("-- ");
+    if let Some(eff) = &d.effect {
+        for s in &eff.outputs {
+            out.push_str(&sanitize(s));
+            out.push(' ');
+        }
+        if eff.outputs.is_empty() { out.push(' '); }
+    } else if let Some(super::effect::Effect::Known { outputs, .. }) = synth {
+        for i in 0..outputs { write!(out, "r{i} ").unwrap(); }
+        if outputs == 0 { out.push(' '); }
+    } else {
+        out.push_str("..b ");
+    }
+    out.push_str(") ");
+
+    // Preamble: push head locals back to the data stack in declaration
+    // order (leftmost = deepest, rightmost = top — same as the original
+    // call stack layout).
+    for name in &input_names {
+        out.push_str(name);
+        out.push(' ');
+    }
+
+    // Body.
     if super::lower_exit::body_uses_exit(&d.body, &r.word_targets) {
         out.push_str("[ ");
         emit_exprs(&d.body, r, out);

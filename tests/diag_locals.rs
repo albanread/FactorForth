@@ -155,6 +155,77 @@ fn method_head_locals_work() {
     assert!(cap.contains("r=<object>"), "method head locals: {cap}");
 }
 
+/// Mid-body `{:` inside an `IF` branch — the newly lifted limitation.
+/// Previously `{:` was only recognised in the colon-def body loop;
+/// `parse_block_until` called `expr_one`, which didn't know about it.
+/// Now `expr_one` has the `"{:"` arm so it works everywhere.
+#[test]
+#[ignore]
+fn locals_inside_if_branch() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        \ Bind two values with {: :} inside the THEN branch.
+        : classify ( n -- )
+            dup 0 >= if
+                {: pos :}
+                ." pos=" pos .
+            else
+                {: neg :}
+                ." neg=" neg .
+            then ;
+        7 classify
+        -3 classify
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("pos=7"),  "{{:}} in IF-then branch: {cap}");
+    assert!(cap.contains("neg=-3"), "{{:}} in ELSE branch: {cap}");
+}
+
+/// Mid-body `{:` inside a `DO … LOOP` body.
+#[test]
+#[ignore]
+fn locals_inside_do_loop() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        \ Each iteration binds the loop index via {: idx :}.
+        : show-range ( n -- )
+            0 do
+                i {: idx :}
+                ." [" idx . ."] "
+            loop ;
+        3 show-range
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[0 ]"), "{{:}} in DO body iter 0: {cap}");
+    assert!(cap.contains("[1 ]"), "{{:}} in DO body iter 1: {cap}");
+    assert!(cap.contains("[2 ]"), "{{:}} in DO body iter 2: {cap}");
+}
+
+/// Mid-body `{:` inside a `BEGIN … WHILE … REPEAT` loop.
+#[test]
+#[ignore]
+fn locals_inside_begin_while_repeat() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        \ Count down from 3, binding the current value each iteration.
+        : countdown ( n -- )
+            begin dup 0 > while
+                {: cur :}
+                ." n=" cur .
+                cur 1 -
+            repeat
+            drop ;
+        3 countdown
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=3"), "{{:}} in BEGIN-WHILE iter 3: {cap}");
+    assert!(cap.contains("n=2"), "{{:}} in BEGIN-WHILE iter 2: {cap}");
+    assert!(cap.contains("n=1"), "{{:}} in BEGIN-WHILE iter 1: {cap}");
+}
+
 /// A METHOD: with multiple head locals binds them in declaration
 /// order.  Discard markers and real names mix freely.
 #[test]
