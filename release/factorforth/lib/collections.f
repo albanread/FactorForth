@@ -210,18 +210,15 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \ the same either way.)
 
 \ `tally ( c xt -- n )` counts the elements that satisfy the predicate.
-\ (Named tally, not count, to leave ANS COUNT's name free.)
-0 VALUE tally-c
-0 VALUE tally-xt
-0 VALUE tally-n
-: tally ( c xt -- n )
-    TO tally-xt  TO tally-c
-    0 TO tally-n
-    tally-c size 0 ?do
-        i tally-c at  tally-xt call1>
-        if  tally-n 1 +  TO tally-n  then
-    loop
-    tally-n ;
+\ (Named tally, not count, to leave ANS COUNT's name free.)  Counter
+\ lives on the data stack, so the algorithm is re-entrant by
+\ construction — calling tally from inside an xt is safe.
+: tally ( c xt -- n ) {: c xt :}
+    0
+    c size 0 ?do
+        i c at  xt call1>
+        if 1+ then
+    loop ;
 
 \ `any? ( c xt -- ? )` — true iff at least one element satisfies xt.
 \ Expressed over tally: any match means the count is non-zero.
@@ -229,40 +226,36 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 
 \ `all? ( c xt -- ? )` — true iff every element satisfies xt.  Starts
 \ true and is cleared by the first element that fails (vacuously true
-\ for an empty collection, the standard convention).
-0 VALUE all-c
-0 VALUE all-xt
-0 VALUE all-flag
-: all? ( c xt -- ? )
-    TO all-xt  TO all-c
-    -1 TO all-flag
-    all-c size 0 ?do
-        i all-c at  all-xt call1>
-        0= if  0 TO all-flag  then
-    loop
-    all-flag ;
+\ for an empty collection, the standard convention).  Combines per-
+\ element results with bitwise `and` — for ANS booleans (-1 / 0) that
+\ behaves as logical AND.
+: all? ( c xt -- ? ) {: c xt :}
+    -1
+    c size 0 ?do
+        i c at  xt call1>  and
+    loop ;
 
 \ `find ( c xt -- x ? )` — the FIRST element satisfying xt and a found
 \ flag.  When nothing matches, x is 0 and the flag is false.  Two
 \ returns rather than a sentinel, so any value (including 0) is a valid
-\ element without ambiguity.
-0 VALUE find-c
-0 VALUE find-xt
-0 VALUE find-val
-0 VALUE find-found
-: find ( c xt -- x ? )
-    TO find-xt  TO find-c
-    0 TO find-val  0 TO find-found
-    find-c size 0 ?do
-        i find-c at                  \ x
-        dup find-xt call1>           \ x flag
-        if                           \ x   (matched)
-            find-found 0= if         \ keep only the first match
-                TO find-val  -1 TO find-found
-            else drop then
-        else drop then               \ x   (no match) -> drop
-    loop
-    find-val find-found ;
+\ element without ambiguity.  (val, flag) state lives on the data
+\ stack throughout the loop.
+: find ( c xt -- x ? ) {: c xt :}
+    0 0                                  \ val flag
+    c size 0 ?do
+        i c at                           \ val flag x
+        dup xt call1>                    \ val flag x matched
+        if
+            over 0= if
+                \ first match: replace (val flag x) with (x -1)
+                nip nip -1
+            else
+                drop
+            then
+        else
+            drop
+        then
+    loop ;
 
 \ ── Numeric reductions (conveniences over fold) ───────────────────
 \
@@ -278,35 +271,29 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \ class's own notion of equality automatically.  (Requires core.f.)
 
 \ `member? ( x c -- ? )` — true iff some element of c equals x.
-0 VALUE mem-x
-0 VALUE mem-c
-0 VALUE mem-flag
-: member? ( x c -- ? )
-    TO mem-c  TO mem-x
-    0 TO mem-flag
-    mem-c size 0 ?do
-        mem-x  i mem-c at  equals?
-        if  -1 TO mem-flag  then
-    loop
-    mem-flag ;
+\ Flag accumulator lives on the data stack; once set, it stays set
+\ via bitwise `or`.
+: member? ( x c -- ? ) {: x c :}
+    0
+    c size 0 ?do
+        x  i c at  equals?  or
+    loop ;
 
 \ `index-of ( x c -- i ? )` — the linear index of the first element
 \ equal to x, plus a found flag.  Like `find`, two returns so index 0
-\ is unambiguous from "not present".
-0 VALUE idx-x
-0 VALUE idx-c
-0 VALUE idx-i
-0 VALUE idx-found
-: index-of ( x c -- i ? )
-    TO idx-c  TO idx-x
-    0 TO idx-i  0 TO idx-found
-    idx-c size 0 ?do
-        idx-x  i idx-c at  equals?
+\ is unambiguous from "not present".  (idx, flag) state lives on the
+\ data stack.
+: index-of ( x c -- i ? ) {: x c :}
+    0 0                                  \ idx flag
+    c size 0 ?do
+        x  i c at  equals?
         if
-            idx-found 0= if  i TO idx-i  -1 TO idx-found  then
+            \ if not yet found, replace (idx flag) with (i -1)
+            dup 0= if
+                2drop i -1
+            then
         then
-    loop
-    idx-i idx-found ;
+    loop ;
 
 \ ── Ordered algorithms (over the collection + ordering protocols) ──
 \
