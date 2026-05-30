@@ -132,23 +132,21 @@ METHOD: write-char ( ch w:string-writer -- )
 \ (possibly different) delimiter character.  They round-trip:
 \   s d split  d join   ==  s
 \
-\ The delimiter is held in a VARIABLE (an integer char code — safe in
-\ raw variable storage, unlike an object reference) so the loops can
-\ use I / read-char without juggling it on the stacks.
-VARIABLE delim-var
+\ The delimiter is captured as a local so split / join are re-entrant —
+\ a user-defined method that itself calls split is safe inside any
+\ field-handler the outer split passes into the protocol.
 
 \ split ( s delim -- coll ).  coll always carries the current field as
 \ its last element; a delimiter starts a fresh empty field, any other
 \ char extends the last one.  Reads via the stream protocol.
-: split ( s delim -- coll )
-    delim-var !                          ( s )
-    string>reader >r                     ( -- ; R: reader )
+: split ( s delim -- coll ) {: s delim :}
+    s string>reader >r                   ( -- ; R: reader )
     new-darray new-string over d-push    ( coll is [ "" ] )
     BEGIN
         r@ read-char                     ( coll ch )
         dup eof? IF
             drop -1
-        ELSE dup delim-var @ = IF
+        ELSE dup delim = IF
             drop  new-string over d-push  0
         ELSE
             over dup size 1- swap at string-push  0
@@ -158,14 +156,12 @@ VARIABLE delim-var
 
 \ join ( coll delim -- s ).  Append each field; insert the delimiter
 \ before every field but the first.
-: join ( coll delim -- s )
-    delim-var !                          ( coll )
-    new-string                           ( coll s )
-    over size 0 ?DO
-        I 0 > IF  delim-var @ over string-push  THEN
-        over I swap at over append-into
-    LOOP
-    nip ;
+: join ( coll delim -- s ) {: coll delim :}
+    new-string                           ( s )
+    coll size 0 ?DO
+        I 0 > IF  delim over string-push  THEN
+        coll I swap at over append-into
+    LOOP ;
 
 \ ── derived protocol words (write ONCE, work for any stream) ──────
 \
