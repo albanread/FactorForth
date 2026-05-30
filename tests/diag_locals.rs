@@ -131,3 +131,44 @@ fn underscore_is_not_referenceable() {
     let result = compile_in_context(src, &mut ctx);
     assert!(result.is_err(), "expected compile error; got {result:?}");
 }
+
+/// METHOD: bodies accept the same `{: ... :}` head-locals form as
+/// `:` bodies.  Because `multi-methods:METHOD:` is itself a parsing
+/// word and doesn't open a `::` locals scope, the emitter routes
+/// these methods through a generated helper word — invisible to the
+/// user.  This is the cleanest expression of the catch-all idiom:
+///
+///     METHOD: show ( x:object -- ) {: _ :} ." <object>" ;
+#[test]
+#[ignore]
+fn method_head_locals_work() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        GENERIC: show ( x -- )
+        METHOD: show ( x:object -- )  {: _ :}
+            ." <object>" ;
+        CLASS: widget ;
+        ." r=" <widget> show
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("r=<object>"), "method head locals: {cap}");
+}
+
+/// A METHOD: with multiple head locals binds them in declaration
+/// order.  Discard markers and real names mix freely.
+#[test]
+#[ignore]
+fn method_head_locals_mix_discard_and_named() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, r#"
+        GENERIC: combine ( a b c -- d )
+        CLASS: bag ;
+        METHOD: combine ( a:bag b c -- d )  {: _ b c :}
+            b c + ;
+        ." r=" <bag> 10 32 combine .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("r=42"), "mixed _ and named: {cap}");
+}

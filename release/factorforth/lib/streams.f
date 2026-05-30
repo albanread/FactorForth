@@ -101,7 +101,8 @@ METHOD: write-char ( ch w:string-writer -- )
 \ (`new-darray <string>`) because methods are emitted before colon
 \ defs in the same translation unit, so a forward reference would
 \ fail at Factor parse time.
-METHOD: new-like ( s:string -- d )  drop new-darray <string> ;
+METHOD: new-like ( s:string -- d )  {: _ :}
+    new-darray <string> ;
 METHOD: at! ( v i s:string -- )     string>chars at! ;
 
 \ ── streams ──────────────────────────────────────────────────────

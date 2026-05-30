@@ -142,6 +142,10 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     // in USING.
     let has_def_locals = s.program.items.iter().any(|i| match i {
         super::ast::Item::Definition(d) => !d.locals.is_empty() || body_uses_locals(&d.body),
+        // METHODs use locals either via declared head locals or via
+        // mid-body `{: … :}` blocks.  Either form lowers through the
+        // helper `::` word, which lives in the `locals` vocab.
+        super::ast::Item::Method(m) => !m.locals.is_empty() || body_uses_locals(&m.body),
         _ => false,
     });
     if has_aux_methods || has_def_locals {
@@ -766,6 +770,59 @@ fn emit_method(
     // is a class.  Empty specialisers fall back to `{ object }`
     // which matches anything (Factor's `object` is the universal
     // supertype).
+    // If the method declares head locals OR the body uses mid-body
+    // locals, route through a freshly-generated `::` helper word:
+    // `multi-methods:METHOD:` is a parsing word and does not, by
+    // itself, open a locals scope for `:>`.  Wrapping the body in a
+    // `::` colon def gives us the canonical locals context; the
+    // method body shrinks to a plain call into the helper.
+    let body_has_mid_locals = body_uses_locals(&m.body);
+    if !m.locals.is_empty() || body_has_mid_locals {
+        let helper = next_method_helper_name(&g_lc);
+        let n_in   = m.effect.inputs.len()  as u32;
+        let n_out  = m.effect.outputs.len() as u32;
+        // `:: helper ( <head-locals> -- r0 r1 … ) body ;`
+        // Head locals come from m.locals when declared; otherwise we
+        // synthesise a0/a1/… so the helper signature still matches
+        // the method's input arity (Factor's `::` form must bind
+        // every input).  `_` becomes a fresh `_dN` placeholder.
+        write!(out, ":: {helper} ( ").unwrap();
+        if m.locals.is_empty() {
+            for i in 0..n_in { write!(out, "a{i} ").unwrap(); }
+        } else {
+            for l in &m.locals {
+                let safe = if l.name == "_" {
+                    next_discard_name()
+                } else {
+                    let n = l.name.to_ascii_lowercase();
+                    if n.contains('.') { n.replace('.', "_") } else { n }
+                };
+                out.push_str(&safe);
+                out.push(' ');
+            }
+        }
+        out.push_str("-- ");
+        for i in 0..n_out { write!(out, "r{i} ").unwrap(); }
+        if n_out == 0 { out.push(' '); }
+        out.push_str(") ");
+        if super::lower_exit::body_uses_exit(&m.body, &r.word_targets) {
+            out.push_str("[ ");
+            emit_exprs(&m.body, r, out);
+            out.push_str(" ] continuations:with-return");
+        } else {
+            emit_exprs(&m.body, r, out);
+        }
+        out.push_str(" ;\n");
+        // `multi-methods:METHOD: gname { specs } helper ;`
+        out.push_str("multi-methods:METHOD: ");
+        out.push_str(&target);
+        out.push_str(" ");
+        emit_specializer_list(m, out);
+        out.push_str(" ");
+        out.push_str(&helper);
+        out.push_str(" ;\n");
+        return;
+    }
     out.push_str("multi-methods:METHOD: ");
     out.push_str(&target);
     out.push_str(" ");
@@ -780,6 +837,22 @@ fn emit_method(
         emit_exprs(&m.body, r, out);
     }
     out.push_str(" ;\n");
+}
+
+/// Monotonic counter for method-body helper words.  Method names can
+/// repeat (different specializers of the same generic), so we tag
+/// helpers with a per-process counter to keep them unique.
+static METHOD_HELPER_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// Generate the next helper word name for a method body that uses
+/// locals.  `gname_lc` is the lower-cased generic name (no `z-` yet)
+/// — the helper name mirrors it for diagnostics.  Output already
+/// includes the `z-` prefix so it slots into the emit stream as a
+/// regular user word.
+fn next_method_helper_name(gname_lc: &str) -> String {
+    let n = METHOD_HELPER_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    let mangled = super::resolve::factor_user_name(gname_lc);
+    format!("{mangled}-mh{n}")
 }
 
 /// Render a count-based effect (`inputs`, `outputs`) as a Forth-style

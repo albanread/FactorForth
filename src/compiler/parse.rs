@@ -853,7 +853,47 @@ impl<'t> Parser<'t> {
             span: raw_effect.span,
         };
 
-        // Body until `;`.
+        // Optional head locals: a `{: name1 name2 :}` block sitting
+        // BEFORE any body expression is captured as the method's head
+        // locals, exactly like colon-def head locals.  At emit time
+        // the method routes through a generated `::` helper word that
+        // takes the locals as its head bindings.  Mid-body `{: … :}`
+        // blocks (handled below in the body loop) generate
+        // Expr::Locals nodes the same way.
+        let mut head_locals: Vec<LocalDecl> = Vec::new();
+        self.skip_comments();
+        if let Some(Token { kind: Tok::Word(w), .. }) = self.peek() {
+            if w == "{:" {
+                let open_span = self.peek().unwrap().span;
+                self.bump();                         // consume `{:`
+                loop {
+                    self.skip_comments();
+                    let Some(t) = self.peek() else {
+                        return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                    };
+                    match &t.kind {
+                        Tok::Word(w) if w == ":}" => { self.bump(); break; }
+                        Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        }
+                        Tok::Word(name) => {
+                            let span = t.span;
+                            head_locals.push(LocalDecl { name: name.clone(), name_span: span });
+                            self.bump();
+                        }
+                        _ => {
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Body until `;`.  Same `{:` mid-body handling as colon defs:
+        // a `{: name1 name2 :}` block anywhere in the body brings
+        // those names into scope for the rest of the body via
+        // Expr::Locals.  This is what lets METHOD: bodies use the `_`
+        // discard idiom (e.g. `{: _ :} ." <object>"`).
         let mut body: Vec<Expr> = Vec::new();
         let end_span;
         loop {
@@ -867,6 +907,32 @@ impl<'t> Parser<'t> {
                     self.bump();
                     break;
                 }
+                Tok::Word(w) if w == "{:" => {
+                    let open_span = t.span;
+                    self.bump();
+                    let mut names: Vec<LocalDecl> = Vec::new();
+                    loop {
+                        self.skip_comments();
+                        let Some(t) = self.peek() else {
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        };
+                        match &t.kind {
+                            Tok::Word(w) if w == ":}" => { self.bump(); break; }
+                            Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
+                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                            }
+                            Tok::Word(name) => {
+                                let span = t.span;
+                                names.push(LocalDecl { name: name.clone(), name_span: span });
+                                self.bump();
+                            }
+                            _ => {
+                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                            }
+                        }
+                    }
+                    body.push(Expr::Locals { names, span: open_span });
+                }
                 _ => {
                     let e = self.expr_one()?;
                     body.push(e);
@@ -879,6 +945,7 @@ impl<'t> Parser<'t> {
             generic_name_span: gname_span,
             specializers,
             effect,
+            locals: head_locals,
             body,
             span: Span { start: kw_span.start, end: end_span.end },
             kind,

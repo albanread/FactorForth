@@ -130,6 +130,39 @@ Both forms emit Factor's `locals` vocab:
 The `_dN` placeholders are fresh per occurrence so two `_`s in the
 same block don't collide; user code has no way to spell them.
 
+## In `METHOD:` bodies
+
+The same `{: ... :}` head and mid-body forms work inside `METHOD:`
+definitions:
+
+```forth
+METHOD: show ( x:object -- )  {: _ :}
+    ." <object>" ;
+
+METHOD: take-edges ( a b c -- pair )  {: a _ c :}
+    a c pair> ;
+```
+
+Because Factor's `multi-methods:METHOD:` is a parsing word that
+doesn't, by itself, open a locals scope for `:>`, the emitter
+routes any method-with-locals through a generated `::` **helper
+word**.  The METHOD: line shrinks to a plain call into the helper:
+
+```factor
+:: z-show-mh1 ( _d1 -- ) "<object>" print-string ;
+multi-methods:METHOD: z-show { object } z-show-mh1 ;
+```
+
+The helper name (`-mh1`, `-mh2`, …) is generated automatically and
+not visible from user code — `SEE show` still shows the original
+method source.  Re-entrancy and locals semantics are exactly the
+same as for `:` defs, including the `_` discard marker.
+
+This is the cleanest expression of catch-all methods: the object
+default for `show`, the `drop`-the-input pattern in `new-like`
+specialisations, and any other method whose effect dictates an arg
+the body ignores.
+
 ## Effect-system interaction
 
 The locals declaration is the authoritative input count.

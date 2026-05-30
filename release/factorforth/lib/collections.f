@@ -92,8 +92,8 @@ METHOD: at!  ( x i d:darray -- )  darray>data rawvec-set ;
 GENERIC: new-like ( c -- d )
 METHOD: new-like ( g:grid -- d )
     dup grid>w swap grid>h 2dup * <cells> <grid> ;
-METHOD: new-like ( d:darray -- e )
-    drop <rawvec> <darray> ;
+METHOD: new-like ( d:darray -- e )  {: _ :}
+    <rawvec> <darray> ;
 
 \ `clone` (Layer 0's copy protocol) — a collection owns a mutable
 \ backing store, so the default shallow clone would share it.  These

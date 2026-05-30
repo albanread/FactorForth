@@ -712,7 +712,21 @@ pub fn resolve_with_prior_and_values_and_classes(
             // via Factor's multi-methods machinery, and the lib so
             // far hasn't needed extras here.
             Item::Method(m) => {
-                resolve_exprs(&m.body, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
+                // Same locals handling as colon defs: head locals
+                // (`{: a b :}` between effect and body) plus any
+                // mid-body locals blocks collectively form the
+                // lexical scope.  `_` is the anonymous-discard marker
+                // and never enters the lookup scope.
+                let mut scope: std::collections::HashSet<String> = m.locals.iter()
+                    .filter(|l| l.name != "_")
+                    .map(|l| l.name.to_ascii_lowercase())
+                    .collect();
+                collect_body_locals(&m.body, &mut scope);
+                if scope.is_empty() {
+                    resolve_exprs(&m.body, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
+                } else {
+                    resolve_exprs(&m.body, &builtins, &combined, &combined_values, &scope, &mut word_targets)?;
+                }
             }
         }
     }

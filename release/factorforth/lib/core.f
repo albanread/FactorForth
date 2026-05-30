@@ -22,8 +22,8 @@
 
 GENERIC: show ( x -- )
 
-METHOD: show ( x:object -- )
-    drop ." <object>" ;
+METHOD: show ( x:object -- )  {: _ :}
+    ." <object>" ;
 
 \ `show-ln ( x -- )` is `show` followed by a newline — the common
 \ interactive case.  Defined once over the generic, so it works for

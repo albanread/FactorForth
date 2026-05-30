@@ -191,6 +191,12 @@ pub struct MethodDef {
     /// source; we strip the `:class` part into MethodSpecializer and
     /// keep the bare names here.
     pub effect: StackEffect,
+    /// Optional Forth-2012 `{: name1 name2 :}` head locals.  Sits
+    /// between the effect annotation and the body, mirrors colon-def
+    /// head locals.  When non-empty, emit routes the method through
+    /// a generated `::` helper word so `:>` and `:` have a locals
+    /// scope to bind into.
+    pub locals: Vec<LocalDecl>,
     pub body: Vec<Expr>,
     pub span: Span,
     /// Which auxiliary slot this method occupies.  Primary methods
