@@ -745,8 +745,31 @@ IN: forth.runtime
     "<" write dup length number>string write "> " write
     [ (nf-pp1) " " write ] each nl ;
 
+! True iff a Factor word name ends with one of the multi-methods
+! shadow-generic suffixes that emit_generic creates for aux method
+! combinations.  Those are internal scaffolding; the user only ever
+! calls the main wrapper, never `foo:primary` / `foo:before` /
+! `foo:after`, so they shouldn't appear in WORDS output.
+: (nf-internal-shadow?) ( name -- ? )
+    dup  ":primary" tail?
+    over ":before"  tail? or
+    swap ":after"   tail? or ;
+
+! List the user's own definitions, **demangled**.
+!
+! Every user word lives in `scratchpad` under the reserved
+! `__NF_USER_PREFIX__` prefix (that placeholder is substituted at
+! boot from `compiler::resolve::USER_NAME_PREFIX` so the two sides
+! never drift).  We filter scratchpad to words whose name carries
+! that prefix — that's exactly the user's surface — drop the
+! shadow-generic siblings, and strip the prefix before printing.
+! The user always sees the ANS name they wrote; the `z-…` form is
+! Factor's business, never theirs.
 : nf-words ( -- )
-    "scratchpad" vocab-words [ name>> print ] each ;
+    "scratchpad" vocab-words
+    [ name>> "__NF_USER_PREFIX__" head? ] filter
+    [ name>> (nf-internal-shadow?) not ] filter
+    [ name>> "__NF_USER_PREFIX__" length tail print ] each ;
 
 ! ── CoreProtocols Layer 1: mutable fixed-cell store ──────────────
 ! A grid / vector holds its elements in a Factor fixed array (fixed
@@ -1008,9 +1031,15 @@ fn worker_main(
         // appends a classic 16-byte hex+ASCII dump of the backing
         // bytes.  Non-destructive (leaves x) so it drops into a
         // pipeline as a debugging tap without disturbing the stack.
-        let tools_setup = TOOLS_SETUP_SRC;
+        // Substitute the `__NF_USER_PREFIX__` placeholder with the
+        // current `USER_NAME_PREFIX` so the Factor-side `nf-words`
+        // (and any other tools-setup word that has to recognise or
+        // demangle user names) stays in lockstep with the Rust-side
+        // mangler.  Single source of truth: `compiler::resolve`.
+        let tools_setup = TOOLS_SETUP_SRC
+            .replace("__NF_USER_PREFIX__", crate::compiler::resolve::USER_NAME_PREFIX);
         trace("worker_main", "running tools setup eval");
-        let tools_result = eval_inner(&api, vm, tools_setup);
+        let tools_result = eval_inner(&api, vm, &tools_setup);
         trace("worker_main", &format!(
             "tools setup done; output={:?}",
             tools_result.interpreter_output));
@@ -1581,3 +1610,35 @@ pub extern "C-unwind" fn nf_rt_read_line(buf: *mut u8, max: i64) -> i64 {
 // the worker thread is left to leak, but the host stays alive
 // and can spawn a fresh Session.  Trade-off documented; see #34
 // journal.
+
+#[cfg(test)]
+mod tests {
+    use super::TOOLS_SETUP_SRC;
+    use crate::compiler::resolve::USER_NAME_PREFIX;
+
+    /// Guard for the placeholder/substitution contract that lets
+    /// Factor-side tools (today: `nf-words`) demangle user names
+    /// without duplicating the prefix.  TOOLS_SETUP_SRC has to
+    /// CONTAIN the placeholder, the worker has to SUBSTITUTE it
+    /// before eval, and the result has to actually carry the
+    /// current `USER_NAME_PREFIX`.  Catches the case where someone
+    /// adds a new use of the placeholder and forgets the consumer,
+    /// or removes the substitution while the source still expects it.
+    #[test]
+    fn tools_setup_prefix_substitution_round_trips() {
+        const PLACEHOLDER: &str = "__NF_USER_PREFIX__";
+        assert!(
+            TOOLS_SETUP_SRC.contains(PLACEHOLDER),
+            "TOOLS_SETUP_SRC should carry `{PLACEHOLDER}` for the worker to substitute"
+        );
+        let substituted = TOOLS_SETUP_SRC.replace(PLACEHOLDER, USER_NAME_PREFIX);
+        assert!(
+            !substituted.contains(PLACEHOLDER),
+            "every `{PLACEHOLDER}` must be substituted — found a stray one in the output"
+        );
+        assert!(
+            substituted.contains(USER_NAME_PREFIX),
+            "substituted source must carry the current USER_NAME_PREFIX (`{USER_NAME_PREFIX}`)"
+        );
+    }
+}
