@@ -357,6 +357,124 @@ fn s_to_n_zero_vs_failure() {
     assert!(cap.contains("e=0 0"), "empty parse fails: {cap}");
 }
 
+/// `to-string` captures any `show` output into a fresh string —
+/// the same `show` that prints to stdout, just with the bytes
+/// caught instead of released.  Composes with every text utility.
+#[test]
+#[ignore]
+fn to_string_captures_show_output() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        \ A string captured back as a string is the same string.
+        ." [" S" hello" >string to-string show ." ]"
+        \ A user class with a custom show.
+        CLASS: point SLOT: x SLOT: y ;
+        METHOD: show ( p:point -- )
+            ." (" dup point>x . ." ," point>y . ." )" ;
+        ." |[" 3 4 <point> to-string show ." ]"
+        \ Capture composes with text utilities — pad the rendered form.
+        ." |[" 42 to-string 6 '0' pad-left show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[hello]"), "string capture: {cap}");
+    assert!(cap.contains("[(3 ,4 )]"), "point capture: {cap}");
+    assert!(cap.contains("[000042]"), "captured + padded: {cap}");
+}
+
+/// `capture-with` lets the caller pick the rendering word — `.`
+/// for raw print, `dump` for debug detail, anything that writes to
+/// the output stream and consumes one value.
+#[test]
+#[ignore]
+fn capture_with_custom_renderer() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        \ `.` prints "42 " (with trailing space) — capture confirms.
+        ." [" 42 ' . capture-with show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[42 ]"), "capture-with .: {cap}");
+}
+
+/// `format1` substitutes one `{}` marker with a value rendered via
+/// `to-string`.  The same `to-string` that routes ints through
+/// `n>string` and user classes through `show`.
+#[test]
+#[ignore]
+fn format1_substitutes_one_value() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" S" Hello, {}!" >string  S" world" >string  format1  show ." ]"
+        ." |[" S" answer = {}" >string  42  format1  show ." ]"
+        ." |[" S" pi ≈ {}" >string  3.14e  format1  show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[Hello, world!]"), "string sub: {cap}");
+    assert!(cap.contains("[answer = 42]"), "int sub: {cap}");
+    assert!(cap.contains("[pi ≈ 3.14]"), "float sub: {cap}");
+}
+
+/// `format2` / `format3` for the two- and three-value common cases.
+/// Values are consumed in left-to-right order across `{}` markers.
+#[test]
+#[ignore]
+fn format2_and_format3() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        ." [" S" {} + {} = {}" >string  2  3  5  format3  show ." ]"
+        ." |[" S" {}-{}" >string  S" alpha" >string  S" beta" >string  format2  show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[2 + 3 = 5]"), "format3 arithmetic: {cap}");
+    assert!(cap.contains("[alpha-beta]"), "format2 strings: {cap}");
+}
+
+/// `format` (the N-ary form) takes a darray of values; perfect for
+/// programmatically built argument lists.
+#[test]
+#[ignore]
+fn format_with_explicit_darray() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE args
+        S" red" >string args d-push
+        S" green" >string args d-push
+        S" blue" >string args d-push
+        ." [" S" rgb({},{},{})" >string args format show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[rgb(red,green,blue)]"), "format N-ary: {cap}");
+}
+
+/// A user class with a custom `show` method renders through
+/// `to-string`, so `format` Just Works on it — protocol all the
+/// way through.
+#[test]
+#[ignore]
+fn format_renders_user_classes() {
+    let (s, out, mut ctx) = fresh();
+    load_layers(&s, &mut ctx);
+    run(&s, &mut ctx, r#"
+        CLASS: point SLOT: x SLOT: y ;
+        METHOD: show ( p:point -- )
+            ." (" dup point>x . ." ," point>y . ." )" ;
+        ." [" S" pos={}" >string  3 4 <point>  format1  show ." ]"
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("[pos=(3 ,4 )]"), "format user class: {cap}");
+}
+
 /// Floats round-trip too: n>string handles them via Factor's float
 /// formatting, s>n handles standard float syntax (decimal point,
 /// exponent).

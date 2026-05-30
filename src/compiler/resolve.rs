@@ -461,6 +461,12 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("num>chars",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-num>str-chars" }),
         ("chars>num",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-str>num"       }),
 
+        // Output-capture bridge: call a 1-in/0-out xt with stdout
+        // redirected to a string-writer; return the captured chars.
+        // Used by streams.f's `to-string` to render any value via
+        // `show` and collect the result instead of printing it.
+        ("capture1",   QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-capture-1"     }),
+
         ("int-type",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "int-type"      }),
         ("float-type",  QualifiedBuiltin { vocab: "forth.runtime", factor_name: "float-type"    }),
         ("string-type", QualifiedBuiltin { vocab: "forth.runtime", factor_name: "string-type"   }),

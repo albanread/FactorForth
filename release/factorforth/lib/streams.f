@@ -356,3 +356,106 @@ METHOD: at! ( v i s:string -- )     string>chars at! ;
 \ Unwraps string → darray → rawvec so the runtime sees a Factor
 \ sequence it can feed to `string>number`.
 : s>n ( s -- n ? )      string>chars darray>data chars>num ;
+
+\ ── show-into-string capture ──────────────────────────────────────
+\
+\ Capture the output of any rendering word as a string.  The xt
+\ should have effect ( x -- ): typically `' show`, but any word
+\ that writes to the output stream works (`' .`, `' dump`, a custom
+\ rendering, etc.).  The output stream is redirected only during
+\ the call; the user's normal stdout is untouched.
+
+\ to-string ( x -- s ) — render x as a string.  Integers and floats
+\ take the direct `n>string` path (no need for a string-writer round
+\ trip just to call back into Factor's `number>string`); everything
+\ else routes through `show` via `capture1`.  The result is a fresh
+\ first-class `string`, so it composes with every text utility:
+\
+\   42 to-string 6 '0' pad-left show       \  → 000042
+\   3 4 <point> to-string size .            \ length of "(3,4)"
+\
+\ Combines with everything: the captured string is a first-class
+\ collection, so `to-string` then `pad-left`, `trim`, `upcase-string`
+\ etc. all compose naturally.
+: to-string ( x -- s )
+    dup typeof int-type   = if  n>string  exit then
+    dup typeof float-type = if  n>string  exit then
+    ' show capture1 <darray> <string> ;
+
+\ capture-with ( x xt -- s ) — render via xt and capture.  The
+\ underlying primitive, exposed for users who want a different
+\ renderer than `show` (e.g. `' dump` for the debug representation
+\ or `' .` for raw number printing).
+: capture-with ( x xt -- s )  capture1 <darray> <string> ;
+
+\ ── Formatted strings: `{}` placeholders ─────────────────────────
+\
+\ `format ( s d -- t )` walks template string `s` and substitutes
+\ each `{}` marker with the next value from darray `d`, rendered
+\ via `to-string`.  Number of `{}`s should equal `d size` — extras
+\ on either side are silently dropped (extra `{}` consumes past
+\ the end and is an error; extra values are ignored).
+\
+\ For the common cases, `format1` / `format2` / `format3` take
+\ the values directly on the stack and build the darray for you.
+\
+\ No escape syntax: a literal `{` (without a `}` after it) passes
+\ through as itself, but there is no way to escape a literal `{}`
+\ pair in the template.  If you need that, build the string with
+\ `string-append`.
+
+\ Helper: is template[i..i+1] the `{}` marker?  Out-of-range → no.
+\ Lifted out so the main loop reads top-down.
+: marker-at? ( s i -- ? ) {: s i :}
+    i 1 + s size < if
+        i s at '{' =  i 1 + s at '}' =  and
+    else 0 then ;
+
+\ Helper: push every char of src onto dst.  Same shape as
+\ `append-into` (which appends across two strings via the chars
+\ slot) but written over the collection protocol, so any
+\ char-collection works as src.
+: push-chars ( src dst -- ) {: src dst :}
+    src size 0 ?do
+        i src at  dst string-push
+    loop ;
+
+\ format ( s d -- t ) — the workhorse.  Two-cursor walk: `vi` over
+\ the value darray, `i` over the template chars.  When `i` hits a
+\ `{}` marker, pop the next value, render it, append, advance both.
+: format ( s d -- t ) {: s d :}
+    new-string {: result :}
+    0 0                                  \ vi i  on the data stack
+    begin
+        dup s size <
+    while
+        s over marker-at? if
+            \ Substitute: stack is ( vi i ); pop the value at d[vi].
+            swap                          \ ( i vi )
+            dup d at to-string  result push-chars
+            1 +                           \ vi+1
+            swap 2 +                      \ skip past `{}`  → ( vi+1 i+2 )
+        else
+            \ Literal char: push s[i], advance i.  `at` is ( i c -- x )
+            \ with c on top, so `dup s at` is what we want — no swap.
+            dup s at  result string-push
+            1 +
+        then
+    repeat
+    2drop
+    result ;
+
+\ The convenience arity wrappers.  Build a darray inline from
+\ stack values and delegate.  These cover ~all real format calls;
+\ for >3 values use `format` with a hand-built darray.
+: format1 ( s v -- t ) {: s v :}
+    new-darray {: d :}  v d d-push
+    s d format ;
+
+: format2 ( s a b -- t ) {: s a b :}
+    new-darray {: d :}  a d d-push  b d d-push
+    s d format ;
+
+: format3 ( s a b c -- t ) {: s a b c :}
+    new-darray {: d :}  a d d-push  b d d-push  c d d-push
+    s d format ;

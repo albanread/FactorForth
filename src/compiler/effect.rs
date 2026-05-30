@@ -394,6 +394,7 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     // ( 0 0 ) on failure — caller branches on the flag.
     m.insert("num>chars",   e(1, 1)); // n -- vec
     m.insert("chars>num",   e(1, 2)); // seq -- n ?
+    m.insert("capture1",    e(2, 1)); // x xt -- vec
 
     // Doc-pane (forth.wf64-gfx): Forth-writable Markdown window.
     m.insert("doc-open",    e(2, 1)); // c-addr u -- id

@@ -670,7 +670,7 @@ struct NfApi<'lib> {
 /// detail, not a user word."
 const TOOLS_SETUP_SRC: &str = r#"
 USING: kernel math math.parser sequences arrays vectors strings
-       byte-arrays io classes words quotations vocabs grouping
+       byte-arrays io io.streams.string classes words quotations vocabs grouping
        namespaces accessors combinators prettyprint.config
        assocs hashtables sets hash-sets
        forth.runtime ;
@@ -855,6 +855,17 @@ IN: forth.runtime
 : nf-str>num ( char-seq -- n ? )
     >string string>number
     dup [ -1 ] [ drop 0 0 ] if ;
+
+! ── show-into-string capture ──────────────────────────────────────
+! `nf-capture-1` calls a 1-in/0-out xt against x with the output
+! stream temporarily redirected to a string-writer; returns the
+! captured output as a Factor vector of char codes.  The Forth side
+! wraps it as a CoreProtocols `string`.  This is the bridge that
+! lets `to-string ( x -- s )` work: render via the same `show` that
+! prints, but catch the bytes instead of releasing them to stdout.
+: nf-capture-1 ( x xt -- vec )
+    [ call( x -- ) ] with-string-writer
+    >vector ;
 "#;
 
 fn worker_main(

@@ -263,6 +263,76 @@ every text utility: `42 n>string 8 '0' pad-left show` →
 
 ---
 
+## Capture: `to-string` & `capture-with`
+
+Render any value as a string instead of printing it. The same
+`show` that writes to stdout is called with the output stream
+temporarily redirected to a string-writer; the captured bytes come
+back as a fresh `string`.
+
+| word            | stack effect    | description                                         |
+|-----------------|-----------------|-----------------------------------------------------|
+| `to-string`     | `( x -- s )`    | render via `show` (ints/floats go direct to `n>string`) |
+| `capture-with`  | `( x xt -- s )` | render via the supplied xt (e.g. `' .`, `' dump`)   |
+
+`to-string` is the common case. It special-cases integers and floats
+through `n>string` (no need for a string-writer round trip), and
+routes everything else through `show`-into-buffer. A user class with
+a custom `METHOD: show` renders through `to-string` automatically —
+the same rendering, just caught instead of released.
+
+```forth
+42 to-string 6 '0' pad-left show       \ → 000042
+3 4 <point> to-string show             \ → (3 ,4 )  (whatever show produces)
+S" hi" >string to-string show          \ → hi      (round-trip)
+```
+
+`capture-with` is the escape hatch when you want a different
+renderer:
+
+```forth
+42 ' .       capture-with show     \ → "42 "       (with trailing space)
+foo ' dump   capture-with show     \ → "<widget>"  (debug detail)
+```
+
+---
+
+## Formatted strings: `{}` placeholders
+
+`format` substitutes each `{}` marker in a template string with a
+value, rendered via `to-string`. Convenience arity wrappers cover
+the common cases; the N-ary form takes a darray of values.
+
+| word        | stack effect              | description                                    |
+|-------------|---------------------------|------------------------------------------------|
+| `format`    | `( s d -- t )`            | substitute each `{}` with `d[i]` to-stringed   |
+| `format1`   | `( s v -- t )`            | one substitution                               |
+| `format2`   | `( s a b -- t )`          | two substitutions, left to right               |
+| `format3`   | `( s a b c -- t )`        | three                                          |
+
+```forth
+S" Hello, {}!" >string S" world" >string format1 show
+                                              \ → Hello, world!
+S" {} + {} = {}" >string  2 3 5 format3 show  \ → 2 + 3 = 5
+S" answer = {}" >string  42 format1 show      \ → answer = 42
+```
+
+There is no escape syntax for a literal `{}` in the template — use
+`string-append` if you need to interleave one. A bare `{` not
+followed by `}` passes through as itself.
+
+`format` composes with every text utility, so app-builder patterns
+become one-liners:
+
+```forth
+\ Right-aligned column of numbers, width 8:
+0 ?do
+    S" item {}: {}" >string  i  i 100 *  format2  8 ' ' pad-right show cr
+loop
+```
+
+---
+
 ## Extending the protocol
 
 To make your own class a stream, implement the generic for its
