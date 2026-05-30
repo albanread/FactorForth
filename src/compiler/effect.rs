@@ -370,6 +370,7 @@ pub fn builtin_effects() -> HashMap<&'static str, Effect> {
     m.insert("call1",       e(2, 0)); // x xt --
     m.insert("call1>",      e(2, 1)); // x xt -- y
     m.insert("call2>",      e(3, 1)); // a b xt -- y
+    m.insert("call2",       e(3, 0)); // a b xt --
     m.insert("(clone)",     e(1, 1)); // obj -- copy
     // dict (hashtable) backing primitives.
     m.insert("<hash>",      e(0, 1)); // -- h

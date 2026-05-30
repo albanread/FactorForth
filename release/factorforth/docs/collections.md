@@ -435,6 +435,67 @@ my-hand sort             \ orders the cards by rank
 
 ---
 
+## Conveniences and reshaping
+
+A handful of small words that ride the same `size` / `at` / `at!` /
+`new-like` protocol. None of them are new mechanism — they're shortcuts
+that read better than the inline forms.
+
+| word          | stack effect       | result                                       |
+|---------------|--------------------|----------------------------------------------|
+| `empty?`      | `( c -- ? )`       | true iff `size` is zero                      |
+| `first`       | `( c -- x )`       | element at index 0 (non-empty)               |
+| `last`        | `( c -- x )`       | element at the last index (non-empty)        |
+| `reverse`     | `( c -- d )`       | a fresh collection in reverse order (uses `new-like`) |
+| `take`        | `( c n -- d )`     | the first `n` elements as a **darray** (clamps to `size`) |
+| `skip`        | `( c n -- d )`     | everything from index `n` onward as a **darray** (clamps to `size`) |
+| `concat`      | `( a b -- c )`     | a fresh darray with `a` then `b` appended    |
+
+`reverse` preserves type (grid→grid, darray→darray) via `new-like`.
+`take`/`skip`/`concat` always return a darray because the result shape
+no longer matches the input (slicing a grid is not a grid).
+
+```forth
+new-darray VALUE xs
+1 xs d-push  2 xs d-push  3 xs d-push  4 xs d-push  5 xs d-push
+
+xs empty? .              \ 0
+xs first . xs last .     \ 1 5
+
+xs reverse VALUE ys
+0 ys at .                \ 5
+
+xs 3 take 0 ' + fold .   \ 6   (1+2+3)
+xs 3 skip size .         \ 2   (just 4 and 5)
+```
+
+## Positional iteration and reduction
+
+| word          | stack effect       | xt                  | what it does                                  |
+|---------------|--------------------|---------------------|-----------------------------------------------|
+| `each-index`  | `( c xt -- )`      | `( i x -- )`        | like `each` but the xt also sees the index    |
+| `map-index`   | `( c xt -- d )`    | `( i x -- y )`      | like `map` but the xt also sees the index     |
+| `reduce`      | `( c xt -- x )`    | `( acc x -- acc )`  | `fold` without an explicit init — seeds with `c[0]` (non-empty) |
+| `partition`   | `( c xt -- yes no )` | `( x -- ? )`      | like `filter` but returns BOTH the kept and the discarded as two darrays, in matching order |
+
+`reduce` pairs nicely with the ordering protocol — `xs ' lesser reduce`
+is the minimum, `xs ' greater reduce` is the maximum, without needing a
+sentinel init:
+
+```forth
+new-darray VALUE xs
+4 xs d-push  1 xs d-push  3 xs d-push  2 xs d-push  5 xs d-push
+
+xs ' + reduce .          \ 15  (sum, no seed)
+xs ' lesser reduce .     \ 1   (min via Layer 0 ordering)
+
+\ classic split:
+: even? ( n -- ? ) 2 mod 0= ;
+xs ' even? partition     \ stack: yes no   (use TO to bind both)
+```
+
+---
+
 ## Extending the protocol
 
 To make your own class a collection, implement the four generics. Once

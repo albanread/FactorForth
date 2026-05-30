@@ -800,6 +800,9 @@ IN: forth.runtime
 : nf-call1> ( x xt -- y ) call( x -- y ) ;
 ! Two-in/one-out call — for fold/reduce: xt is ( acc x -- acc ).
 : nf-call2> ( a b xt -- y ) call( a b -- y ) ;
+! Two-in/zero-out call — for each-index-style positional iteration
+! where the xt takes ( i x -- ) and produces nothing.
+: nf-call2 ( a b xt -- ) call( a b -- ) ;
 ! Shallow structural copy — the default behind CoreProtocols `clone`.
 ! Factor's kernel `clone` copies a tuple's immediate slots (and a
 ! sequence's elements); collections override `clone` to deep-copy

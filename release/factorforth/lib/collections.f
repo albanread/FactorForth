@@ -373,3 +373,159 @@ VARIABLE srt-j
         repeat
         srt-key srt-j @ srt-c at!                  \ c[j] := key
     loop ;
+
+\ ── Convenience accessors over the collection protocol ───────────
+\
+\ Tiny shortcuts.  Read better than `0 c at` / `c size 1- swap at`,
+\ and only depend on `size` + `at`, so they work on every collection.
+
+: empty? ( c -- ? )  size 0= ;
+
+\ `first` requires a non-empty collection (no in-bounds fallback —
+\ same convention as `min-of` / `max-of`).  Returns the element at
+\ index 0.
+: first  ( c -- x )  0 swap at ;
+
+\ `last` returns the element at the last index.  Non-empty.
+: last   ( c -- x )  dup size 1- swap at ;
+
+\ ── reverse — a fresh collection in reverse order ────────────────
+\
+\ Uses `new-like` so the result has the SAME backing type as the
+\ input (a grid reverses to a grid, a darray to a darray), and fills
+\ via `at!`.  The original is untouched.
+\
+\ Subtle point: a fresh `darray` is empty, and its `at!` grows the
+\ backing only on monotonically ascending indices.  So we write the
+\ destination IN ORDER (`d[0]` first, then `d[1]`, ...) while pulling
+\ from the source in descending order.  For a grid (`new-like` gives
+\ a fully-allocated zeroed backing) write order is unconstrained;
+\ this same loop just happens to be in ascending dest order.
+0 VALUE rev-c
+0 VALUE rev-dst
+: reverse ( c -- d )
+    TO rev-c
+    rev-c new-like TO rev-dst
+    rev-c size 0 ?do
+        rev-c size 1- i -  rev-c at                \ x := c[size-1-i]   ( x )
+        i rev-dst at!                              \ d[i] := x          ( )
+    loop
+    rev-dst ;
+
+\ ── Positional iteration: each-index / map-index ────────────────────
+\
+\ Like `each` / `map`, but the xt gets the INDEX too — handy when the
+\ position matters (printing with numbers, building lookup tables,
+\ pairing two collections by index).
+\
+\ each-index xt: ( i x -- )           map-index xt: ( i x -- y )
+
+0 VALUE eai-c
+0 VALUE eai-xt
+: each-index ( c xt -- )
+    TO eai-xt  TO eai-c
+    eai-c size 0 ?do
+        i  i eai-c at  eai-xt call2
+    loop ;
+
+0 VALUE mi-c
+0 VALUE mi-xt
+0 VALUE mi-dst
+: map-index ( c xt -- d )
+    TO mi-xt  TO mi-c
+    mi-c new-like TO mi-dst
+    mi-c size 0 ?do
+        i  i mi-c at  mi-xt call2>             \ y := xt(i, c[i])
+        i mi-dst at!                           \ d[i] := y
+    loop
+    mi-dst ;
+
+\ ── reduce — fold without an explicit init ─────────────────────────
+\
+\ Seeds the accumulator with the FIRST element and folds the rest in,
+\ so the caller doesn't need a meaningful zero.  Non-empty (same
+\ convention as `min-of` / `max-of`).
+\
+\ reduce xt: ( acc x -- acc )
+
+0 VALUE rdc-c
+0 VALUE rdc-xt
+0 VALUE rdc-acc
+: reduce ( c xt -- x )
+    TO rdc-xt  TO rdc-c
+    0 rdc-c at TO rdc-acc                      \ seed := c[0]
+    rdc-c size 1 ?do
+        rdc-acc  i rdc-c at  rdc-xt call2>  TO rdc-acc
+    loop
+    rdc-acc ;
+
+\ ── partition — split into matching / non-matching ─────────────────
+\
+\ Like `filter`, but you get BOTH the kept and the discarded elements
+\ as a pair of darrays — saves a second pass for `filter` + an
+\ inverted-predicate filter.  Result is two darrays in matching order.
+
+0 VALUE prt-c
+0 VALUE prt-xt
+0 VALUE prt-yes
+0 VALUE prt-no
+: partition ( c xt -- yes no )
+    TO prt-xt  TO prt-c
+    new-darray TO prt-yes
+    new-darray TO prt-no
+    prt-c size 0 ?do
+        i prt-c at                              \ x
+        dup prt-xt call1>                       \ x ?
+        if  prt-yes d-push  else  prt-no d-push  then
+    loop
+    prt-yes prt-no ;
+
+\ ── take / skip — prefix / suffix slicing ──────────────────────────
+\
+\ `take ( c n -- d )` — the first `n` elements as a fresh darray.
+\ `skip ( c n -- d )` — everything from index `n` onward.
+\
+\ Like `filter`, the result is always a darray (the new shape doesn't
+\ match the input's; a 2-D grid sliced to a flat sequence is the
+\ honest representation).  Both clamp to `size`: `take` of more than
+\ exists returns the whole sequence, `skip` of more returns empty.
+
+0 VALUE tk-c
+0 VALUE tk-n
+0 VALUE tk-dst
+: take ( c n -- d )
+    TO tk-n  TO tk-c
+    new-darray TO tk-dst
+    tk-n tk-c size min 0 ?do
+        i tk-c at  tk-dst d-push
+    loop
+    tk-dst ;
+
+0 VALUE sk-c
+0 VALUE sk-n
+0 VALUE sk-dst
+: skip ( c n -- d )
+    TO sk-n  TO sk-c
+    new-darray TO sk-dst
+    \ Clamp n to size so `?do` doesn't get start > limit (which on
+    \ ANS Forth would run the body anyway with the supplied index,
+    \ leading to out-of-bounds reads on `at`).
+    sk-c size   sk-n sk-c size min   ?do
+        i sk-c at  sk-dst d-push
+    loop
+    sk-dst ;
+
+\ ── concat — append two collections into a fresh darray ────────────
+\
+\ Same convention: the result is a darray regardless of input shapes,
+\ because two grids of different sizes don't add up to a grid.
+
+0 VALUE cat-a
+0 VALUE cat-b
+0 VALUE cat-dst
+: concat ( a b -- c )
+    TO cat-b  TO cat-a
+    new-darray TO cat-dst
+    cat-a size 0 ?do  i cat-a at  cat-dst d-push  loop
+    cat-b size 0 ?do  i cat-b at  cat-dst d-push  loop
+    cat-dst ;

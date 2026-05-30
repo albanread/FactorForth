@@ -426,6 +426,7 @@ pub fn builtin_table() -> HashMap<&'static str, Target> {
         ("call1",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1"       }),
         ("call1>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call1>"      }),
         ("call2>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call2>"      }),
+        ("call2",      QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-call2"       }),
         ("(clone)",    QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-clone"       }),
         // dict (hashtable) backing primitives.
         ("<hash>",     QualifiedBuiltin { vocab: "forth.runtime", factor_name: "nf-hash-new"    }),

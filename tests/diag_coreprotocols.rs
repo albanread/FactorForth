@@ -645,3 +645,207 @@ fn othello_play_flips_a_disc() {
     assert_eq!(cap.matches('X').count(), 4, "4 black after flip: {cap}");
     assert_eq!(cap.matches('O').count(), 1, "1 white after flip: {cap}");
 }
+
+// ── Round 1: empty? / first / last / reverse ─────────────────────
+
+#[test]
+#[ignore]
+fn empty_first_last_conveniences() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE empty
+        ." e=" empty empty? .
+        new-darray VALUE xs
+        10 xs d-push  20 xs d-push  30 xs d-push
+        ." |ne=" xs empty? .
+        ." |f=" xs first .
+        ." |l=" xs last .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("e=-1"), "empty? on empty darray: {cap}");
+    assert!(cap.contains("ne=0"), "empty? on non-empty darray: {cap}");
+    assert!(cap.contains("f=10"), "first of [10,20,30]: {cap}");
+    assert!(cap.contains("l=30"), "last of [10,20,30]: {cap}");
+}
+
+#[test]
+#[ignore]
+fn each_index_passes_position_and_element() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        100 xs d-push  200 xs d-push  300 xs d-push
+        \ accumulate sum of (i * x) into acc
+        0 VALUE acc
+        : weigh ( i x -- )  * acc + TO acc ;
+        xs ' weigh each-index
+        ." acc=" acc .                            \ 0*100 + 1*200 + 2*300 = 800
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("acc=800"), "each-index weighted sum: {cap}");
+}
+
+#[test]
+#[ignore]
+fn map_index_uses_position_in_transform() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        10 xs d-push  20 xs d-push  30 xs d-push  40 xs d-push
+        : plus ( i x -- y )  + ;                  \ y = i + x
+        xs ' plus map-index VALUE ys
+        ." e0=" 0 ys at .                         \ 0 + 10 = 10
+        ." |e1=" 1 ys at .                        \ 1 + 20 = 21
+        ." |e2=" 2 ys at .                        \ 2 + 30 = 32
+        ." |e3=" 3 ys at .                        \ 3 + 40 = 43
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("e0=10") && cap.contains("e1=21")
+            && cap.contains("e2=32") && cap.contains("e3=43"),
+        "map-index should add index to each element: {cap}");
+}
+
+#[test]
+#[ignore]
+fn reduce_folds_without_explicit_seed() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        4 xs d-push  1 xs d-push  3 xs d-push  2 xs d-push  5 xs d-push
+        \ sum the elements without a seed
+        ." sum=" xs ' + reduce .                  \ 4+1+3+2+5 = 15
+        \ minimum via `lesser` (Layer 0 ordering protocol)
+        ." |min=" xs ' lesser reduce .            \ 1
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("sum=15"), "reduce + over [4,1,3,2,5]: {cap}");
+    assert!(cap.contains("min=1"), "reduce lesser over [4,1,3,2,5]: {cap}");
+}
+
+#[test]
+#[ignore]
+fn partition_splits_into_yes_and_no() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        \ Two-output convention: pre-declare VALUE slots, then assign
+        \ with TO.  (Cleaner than VARIABLE / ! and matches the
+        \ accumulator pattern other tests use.)
+        0 VALUE myyes
+        0 VALUE myno
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push  4 xs d-push  5 xs d-push  6 xs d-push
+        : even? ( n -- ? ) 2 mod 0= ;
+        xs ' even? partition          \ stack: yes no  (no on top)
+        TO myno  TO myyes
+        ." y=" myyes size .                       \ 3 evens
+        ." |n=" myno  size .                      \ 3 odds
+        \ matching order: yes = [2,4,6], no = [1,3,5]
+        ." |y0=" 0 myyes at .                     \ 2
+        ." |y2=" 2 myyes at .                     \ 6
+        ." |n0=" 0 myno  at .                     \ 1
+        ." |n2=" 2 myno  at .                     \ 5
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("y=3") && cap.contains("n=3"), "partition sizes: {cap}");
+    assert!(cap.contains("y0=2") && cap.contains("y2=6"), "yes order: {cap}");
+    assert!(cap.contains("n0=1") && cap.contains("n2=5"), "no order: {cap}");
+}
+
+#[test]
+#[ignore]
+fn take_and_skip_slice() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        10 xs d-push  20 xs d-push  30 xs d-push  40 xs d-push  50 xs d-push
+        xs 2 take VALUE first2
+        xs 2 skip VALUE rest
+        ." t=" first2 size .                      \ 2
+        ." |t0=" 0 first2 at .                    \ 10
+        ." |t1=" 1 first2 at .                    \ 20
+        ." |s=" rest size .                       \ 3
+        ." |s0=" 0 rest at .                      \ 30
+        ." |s2=" 2 rest at .                      \ 50
+        \ clamping: take more than exists, skip past end
+        ." |big=" xs 99 take size .               \ 5 (all)
+        ." |over=" xs 99 skip size .              \ 0
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("t=2") && cap.contains("t0=10") && cap.contains("t1=20"),
+        "take first 2: {cap}");
+    assert!(cap.contains("s=3") && cap.contains("s0=30") && cap.contains("s2=50"),
+        "skip first 2: {cap}");
+    assert!(cap.contains("big=5") && cap.contains("over=0"),
+        "take/skip clamping: {cap}");
+}
+
+#[test]
+#[ignore]
+fn concat_appends_into_a_fresh_darray() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE a
+        new-darray VALUE b
+        1 a d-push  2 a d-push
+        10 b d-push  20 b d-push  30 b d-push
+        a b concat VALUE c
+        ." n=" c size .                           \ 5
+        ." |e0=" 0 c at .                         \ 1
+        ." |e1=" 1 c at .                         \ 2
+        ." |e2=" 2 c at .                         \ 10
+        ." |e4=" 4 c at .                         \ 30
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=5"), "concat length: {cap}");
+    assert!(cap.contains("e0=1") && cap.contains("e1=2")
+            && cap.contains("e2=10") && cap.contains("e4=30"),
+        "concat preserves order: {cap}");
+}
+
+#[test]
+#[ignore]
+fn reverse_returns_new_collection_in_reverse() {
+    let (s, out, mut ctx) = fresh();
+    run(&s, &mut ctx, CORE);
+    run(&s, &mut ctx, COLLECTIONS);
+    run(&s, &mut ctx, r#"
+        new-darray VALUE xs
+        1 xs d-push  2 xs d-push  3 xs d-push  4 xs d-push
+        xs reverse VALUE ys
+        ." n=" ys size .
+        ." |e0=" 0 ys at .
+        ." |e1=" 1 ys at .
+        ." |e2=" 2 ys at .
+        ." |e3=" 3 ys at .
+        ." |orig=" 0 xs at .
+    "#);
+    let cap = captured(&out);
+    eprintln!("captured: {cap:?}");
+    assert!(cap.contains("n=4"), "reverse preserves length: {cap}");
+    assert!(cap.contains("e0=4") && cap.contains("e1=3")
+            && cap.contains("e2=2") && cap.contains("e3=1"),
+        "reverse should yield [4,3,2,1]: {cap}");
+    assert!(cap.contains("orig=1"),
+        "original collection must be untouched: {cap}");
+}
