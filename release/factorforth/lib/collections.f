@@ -320,3 +320,56 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
         then
     loop
     idx-i idx-found ;
+
+\ ── Ordered algorithms (over the collection + ordering protocols) ──
+\
+\ Written ONCE against size/at/at! (Layer 1) and `cmp` (Layer 0's
+\ ordering protocol, core.f), so they work on any collection whose
+\ elements implement `cmp` — numbers out of the box, your own classes
+\ the moment they answer `cmp`.  Requires core.f.
+
+\ `min-of ( c -- x )` / `max-of ( c -- x )` — the least / greatest
+\ element by `cmp`.  Expressed as a fold seeded with the first element,
+\ so they cost one pass and need a NON-EMPTY collection.
+: min-of ( c -- x )  dup 0 swap at  ' lesser  fold ;
+: max-of ( c -- x )  dup 0 swap at  ' greater fold ;
+
+\ `sorted? ( c -- ? )` — is the collection in non-decreasing `cmp`
+\ order?  Walks adjacent pairs; starts true and is cleared by the first
+\ inversion (vacuously true for size 0 or 1).
+0 VALUE srt?-c
+0 VALUE srt?-ok
+: sorted? ( c -- ? )
+    TO srt?-c  -1 TO srt?-ok
+    srt?-c size 1 ?do
+        i 1- srt?-c at   i srt?-c at   cmp 0>     \ c[i-1] sorts after c[i]?
+        if  0 TO srt?-ok  then
+    loop
+    srt?-ok ;
+
+\ `sort ( c -- )` — sort the collection IN PLACE by `cmp`.  Insertion
+\ sort: simple and obviously correct, O(n^2), fine for the small
+\ in-memory collections these protocols target.  Mutates via at!, so
+\ the collection must be writable at every index (grid and darray are).
+\
+\ `srt-continue?` is split out so the loop guard can short-circuit:
+\ ANS `and` is not lazy, so testing `c[j-1]` while j could be 0 would
+\ read index -1.  The IF guards that read behind the j>0 test.
+0 VALUE srt-c
+0 VALUE srt-key
+VARIABLE srt-j
+: srt-continue? ( -- ? )                          \ j > 0  AND  c[j-1] after key
+    srt-j @ 0 > if
+        srt-j @ 1- srt-c at  srt-key  cmp 0>
+    else 0 then ;
+: sort ( c -- )
+    TO srt-c
+    srt-c size 1 ?do
+        i srt-c at TO srt-key                      \ key := c[i]
+        i srt-j !                                  \ j   := i
+        begin srt-continue? while
+            srt-j @ 1- srt-c at  srt-j @ srt-c at!  \ c[j] := c[j-1]  (shift right)
+            srt-j @ 1- srt-j !                      \ j--
+        repeat
+        srt-key srt-j @ srt-c at!                  \ c[j] := key
+    loop ;

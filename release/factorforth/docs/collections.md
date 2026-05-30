@@ -389,6 +389,52 @@ g clone VALUE g2
 
 ---
 
+## Ordered algorithms
+
+These ride **two** protocols at once: the collection protocol
+(`size`/`at`/`at!`) and Layer 0's [ordering protocol](core.md#ordering--cmp)
+(`cmp`). Written once, they work on any collection whose elements
+implement `cmp` — numbers out of the box, your own classes the moment
+they answer `cmp`. (Load `lib/core.f` first.)
+
+| word       | stack effect   | result                                       |
+|------------|----------------|----------------------------------------------|
+| `min-of`   | `( c -- x )`   | least element by `cmp` (non-empty)           |
+| `max-of`   | `( c -- x )`   | greatest element by `cmp` (non-empty)        |
+| `sorted?`  | `( c -- ? )`   | is `c` in non-decreasing `cmp` order?        |
+| `sort`     | `( c -- )`     | sort `c` **in place** by `cmp`               |
+
+`min-of` / `max-of` are single-pass folds (seeded with the first
+element, hence the non-empty requirement). `sorted?` walks adjacent
+pairs and is vacuously true for 0 or 1 elements. `sort` is an in-place
+insertion sort — simple and obviously correct, O(n²), which suits the
+small in-memory collections these protocols target; it mutates through
+`at!`, so the collection must be writable at every index (grid and
+darray are).
+
+```forth
+new-darray VALUE xs
+3 xs d-push  1 xs d-push  4 xs d-push  1 xs d-push  5 xs d-push
+
+xs min-of .              \ 1
+xs max-of .              \ 5
+xs sorted? .             \ 0    (3 1 4 1 5 isn't ordered)
+xs sort
+xs sorted? .             \ -1   (now it is)
+0 xs at .                \ 1
+4 xs at .                \ 5
+```
+
+Because they're written against `cmp`, a class that defines its own
+ordering sorts correctly with no extra code:
+
+```forth
+\ given  METHOD: cmp ( a b:card -- n ) … ;  (see core.md)
+my-hand sort             \ orders the cards by rank
+```
+
+---
+
 ## Extending the protocol
 
 To make your own class a collection, implement the four generics. Once

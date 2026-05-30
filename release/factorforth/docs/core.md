@@ -50,6 +50,10 @@ flowchart TB
 | `show-ln`  | `( x -- )`        | `show` then a newline                        | — (over `show`)    |
 | `equals?`  | `( a b -- ? )`    | value equality                               | ANS `=`            |
 | `clone`    | `( x -- copy )`   | an independent copy                          | shallow copy       |
+| `cmp`      | `( a b -- n )`    | three-way ordering (−/0/+)                    | numeric `<` / `>`  |
+
+Plus the words derived over `cmp`: `before?`, `after?`, `lesser`,
+`greater` (see [Ordering](#ordering--cmp)).
 
 ---
 
@@ -171,6 +175,57 @@ g clone VALUE g2
 > If it owns a mutable array, vector, hashtable, or another mutable
 > object, override `clone` to `(clone)` that backing. See
 > [Collections → clone](collections.md).
+
+---
+
+## Ordering — `cmp`
+
+`cmp ( a b -- n )` is **three-way comparison**: a negative result means
+`a` sorts *before* `b`, zero means equal-in-order, a positive result
+means `a` sorts *after* `b`. It's the hook the Layer 1 ordered
+algorithms (`min-of` / `max-of` / `sorted?` / `sort`) dispatch through,
+so they honour whatever order a class defines.
+
+```forth
+GENERIC: cmp ( a b -- n )
+METHOD: cmp ( a b:object -- n )                 \ the default — numeric
+    2dup < if 2drop -1 else > if 1 else 0 then then ;
+```
+
+The default orders by numeric value (ANS `<` / `>`), so numbers and
+characters work out of the box. A class with its own notion of order
+overrides it — and typically delegates to an existing `cmp`:
+
+```forth
+CLASS: card SLOT: rank SLOT: suit ;
+METHOD: cmp ( a b:card -- n )
+    card>rank swap card>rank swap cmp ;          \ order by rank
+```
+
+Four words are derived **once** over `cmp`, so they serve every type
+that implements it:
+
+| word      | stack effect    | meaning                              |
+|-----------|-----------------|--------------------------------------|
+| `before?` | `( a b -- ? )`  | does `a` sort strictly before `b`?   |
+| `after?`  | `( a b -- ? )`  | does `a` sort strictly after `b`?    |
+| `lesser`  | `( a b -- x )`  | the one that sorts first (`a` on a tie) |
+| `greater` | `( a b -- x )`  | the one that sorts last (`a` on a tie)  |
+
+```forth
+5 3 cmp .          \ 1    (5 sorts after 3)
+3 5 before? .      \ -1
+5 3 lesser .       \ 3
+5 3 greater .      \ 5
+```
+
+Implement `cmp` for your class and the Layer 1 ordered algorithms
+(`sort` and friends) work on collections of it for free — that's the
+open-protocol payoff again. See [Collections → ordered
+algorithms](collections.md#ordered-algorithms).
+
+> Named `cmp`, not `compare`, so it doesn't shadow Factor's
+> `math.order:compare`, which is in scope in the emitted IR.
 
 ---
 
