@@ -156,64 +156,51 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \
 \ `each ( c xt -- )` runs xt once per element (the element on the
 \ stack).  xt is an execution token — get one with `'`:  xs ' . each
-\ prints every element.  (Held in VALUEs across the loop so the
-\ collection and token read cleanly; single-threaded, like the rest.)
-0 VALUE each-c
-0 VALUE each-xt
-: each ( c xt -- )
-    TO each-xt  TO each-c
-    each-c size 0 do
-        i each-c at  each-xt call1
+\ prints every element.  Locals capture the collection and token
+\ per-call, so each is fully re-entrant — an xt body can call `each`
+\ on another collection without corrupting the outer activation.
+: each ( c xt -- ) {: c xt :}
+    c size 0 do
+        i c at  xt call1
     loop ;
 
 \ `map ( c xt -- d )` applies xt ( x -- y ) to every element and
 \ collects the results into a fresh collection of the SAME type as the
 \ input — a grid maps to a grid, a darray to a darray.  The result is
 \ built by `new-like` and filled by linear index, so the shape (a
-\ grid's w*h, a darray's length) is preserved.
-0 VALUE map-c
-0 VALUE map-xt
-0 VALUE map-dst
-: map ( c xt -- d )
-    TO map-xt  TO map-c
-    map-c new-like TO map-dst
-    map-c size 0 ?do
-        i map-c at  map-xt call1>    \ y
-        i map-dst at!                \ write at the same linear index
+\ grid's w*h, a darray's length) is preserved.  Mid-body `{: dst :}`
+\ binds the new collection right after `new-like` produces it.
+: map ( c xt -- d ) {: c xt :}
+    c new-like {: dst :}
+    c size 0 ?do
+        i c at  xt call1>          \ y
+        i dst at!                  \ write at the same linear index
     loop
-    map-dst ;
+    dst ;
 
 \ `filter ( c xt -- d )` keeps the elements for which the predicate
 \ xt ( x -- ? ) is true, into a fresh darray.
-0 VALUE filt-c
-0 VALUE filt-xt
-0 VALUE filt-dst
-: filter ( c xt -- d )
-    TO filt-xt  TO filt-c
-    new-darray TO filt-dst
-    filt-c size 0 do
-        i filt-c at                 \ element
-        dup filt-xt call1>          \ element flag
-        if filt-dst d-push else drop then
+: filter ( c xt -- d ) {: c xt :}
+    new-darray {: dst :}
+    c size 0 do
+        i c at                     \ element
+        dup xt call1>              \ element flag
+        if dst d-push else drop then
     loop
-    filt-dst ;
+    dst ;
 
 \ `fold ( c init xt -- acc )` threads an accumulator through every
 \ element, left to right: acc starts at init, and for each element
 \ xt ( acc x -- acc ) folds it in.  This is the general reducer the
 \ other algorithms specialise — sum is `0 ' + fold`, and so on.
-\ (Held in VALUEs across the loop, like each/map/filter.  call2> is
-\ the two-in/one-out effect-annotated call that keeps the DO loop
-\ inferable.)
-0 VALUE fold-c
-0 VALUE fold-xt
-0 VALUE fold-acc
-: fold ( c init xt -- acc )
-    TO fold-xt  TO fold-acc  TO fold-c
-    fold-c size 0 do
-        fold-acc  i fold-c at  fold-xt call2>  TO fold-acc
-    loop
-    fold-acc ;
+\ The accumulator lives on the data stack between iterations; locals
+\ just bind c and xt.  call2> is the two-in/one-out effect-annotated
+\ call that keeps the DO loop inferable.
+: fold ( c init xt -- acc ) {: c init xt :}
+    init
+    c size 0 do
+        i c at  xt call2>
+    loop ;
 
 \ ── Search & predicate combinators ────────────────────────────────
 \
