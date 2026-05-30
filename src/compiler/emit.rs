@@ -111,10 +111,13 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
         if !matches!(m.kind, super::ast::MethodKind::Primary)
     ));
     // Forth-2012 `{: … :}` locals on a `:` body also lower to
-    // Factor's `::` form, so the same `locals` USING covers it.
-    let has_def_locals = s.program.items.iter().any(|i| matches!(i,
-        super::ast::Item::Definition(d) if !d.locals.is_empty()
-    ));
+    // Factor's `::` form (head locals) or chained `:>` bindings
+    // (mid-body locals).  Either way they need the `locals` vocab
+    // in USING.
+    let has_def_locals = s.program.items.iter().any(|i| match i {
+        super::ast::Item::Definition(d) => !d.locals.is_empty() || body_uses_locals(&d.body),
+        _ => false,
+    });
     if has_aux_methods || has_def_locals {
         set.insert("locals");
     }
@@ -125,6 +128,28 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
     // used — its target's vocab IS "continuations" — so the
     // `with-return` wrap emit.rs adds for the same case resolves.
     set.into_iter().collect()
+}
+
+/// True iff any `Expr::Locals` (mid-body `{: … :}` block) appears
+/// anywhere in the body, including inside control-flow regions.
+/// Used by `vocabs_needed` to pull in the `locals` vocab.
+fn body_uses_locals(body: &[Expr]) -> bool {
+    body.iter().any(|e| match e {
+        Expr::Locals { .. } => true,
+        Expr::If { then_body, else_body, .. } =>
+            body_uses_locals(then_body)
+            || else_body.as_deref().map(body_uses_locals).unwrap_or(false),
+        Expr::BeginUntil { body, .. }
+        | Expr::BeginAgain { body, .. }
+        | Expr::DoLoop { body, .. } => body_uses_locals(body),
+        Expr::BeginWhileRepeat { pred, body, .. } =>
+            body_uses_locals(pred) || body_uses_locals(body),
+        Expr::Case { arms, default, .. } => {
+            arms.iter().any(|a| body_uses_locals(&a.match_expr) || body_uses_locals(&a.body))
+                || default.as_deref().map(body_uses_locals).unwrap_or(false)
+        }
+        _ => false,
+    })
 }
 
 /// Compute the set of generic names (lowercase) in this compile that
@@ -1529,6 +1554,21 @@ fn emit_expr(e: &Expr, r: &Sema, out: &mut String) {
                     let _ = write!(out,
                         "\"LET codegen error: {escaped}\" forth.runtime:print-string");
                 }
+            }
+        }
+
+        // Mid-body `{: a b c :}` block — lower to Factor's `:>`
+        // bindings.  Forth-2012 says the rightmost name binds the
+        // top of stack, so we emit the names IN REVERSE so each
+        // successive `:>` consumes what was on top at that point.
+        // `:> name` is from the `locals` vocab, which the
+        // `vocabs_needed` pass pulls in whenever any def declares
+        // locals (head-of-body or mid-body).
+        Expr::Locals { names, .. } => {
+            for l in names.iter().rev() {
+                let n = l.name.to_ascii_lowercase();
+                let safe = if n.contains('.') { n.replace('.', "_") } else { n };
+                write!(out, ":> {safe} ").unwrap();
             }
         }
     }

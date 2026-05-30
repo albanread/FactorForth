@@ -595,6 +595,37 @@ impl<'t> Parser<'t> {
                         outer: colon_span, inner: t.span,
                     });
                 }
+                // Mid-body `{: name1 name2 :}` locals block.  Same
+                // shape as the head-of-body one, but it consumes from
+                // the data stack AT THIS POINT in the body and brings
+                // the names into scope for the rest of the body.
+                // Emitted as a chain of Factor `:>` bindings.
+                Tok::Word(w) if w == "{:" => {
+                    let open_span = t.span;
+                    self.bump();
+                    let mut names: Vec<LocalDecl> = Vec::new();
+                    loop {
+                        self.skip_comments();
+                        let Some(t) = self.peek() else {
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        };
+                        match &t.kind {
+                            Tok::Word(w) if w == ":}" => { self.bump(); break; }
+                            Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
+                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                            }
+                            Tok::Word(name) => {
+                                let span = t.span;
+                                names.push(LocalDecl { name: name.clone(), name_span: span });
+                                self.bump();
+                            }
+                            _ => {
+                                return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                            }
+                        }
+                    }
+                    body.push(Expr::Locals { names, span: open_span });
+                }
                 _ => {
                     let e = self.expr_one()?;
                     body.push(e);

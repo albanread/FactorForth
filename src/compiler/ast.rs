@@ -568,6 +568,17 @@ pub enum Expr {
         form: super::let_lang::LetForm,
         span: Span,
     },
+
+    /// A mid-body `{: name1 name2 :}` block.  Consumes one stack
+    /// item per name (rightmost name binds the top of stack first,
+    /// matching Forth-2012 semantics) and brings the names into
+    /// lexical scope for the rest of the body.  Lowers to a chain
+    /// of Factor `:>` bindings.  Effect: `( … x_n -- )` where
+    /// `n = names.len()`.
+    Locals {
+        names: Vec<LocalDecl>,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -614,6 +625,7 @@ impl Expr {
             Expr::To               { span, .. } => *span,
             Expr::See              { span, .. } => *span,
             Expr::LetForm          { span, .. } => *span,
+            Expr::Locals           { span, .. } => *span,
         }
     }
 }

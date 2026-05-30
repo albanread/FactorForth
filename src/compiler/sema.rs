@@ -911,6 +911,12 @@ fn walk_body_for_refs(exprs: &[Expr], caller: Option<&str>, sema: &mut Sema) {
                 let lc = name.to_ascii_lowercase();
                 sema.use_sites.entry(lc).or_default().push(*span);
             }
+            Expr::Locals { .. } => {
+                // Locals declarations have no callable use-sites:
+                // the names just enter the body's lexical scope and
+                // resolve sees them as Target::Local.  No call-graph
+                // edges either.
+            }
         }
     }
 }

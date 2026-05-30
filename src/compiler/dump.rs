@@ -278,6 +278,11 @@ fn write_expr(out: &mut String, e: &Expr, depth: usize) {
             let _ = writeln!(out, "{indent}  {} results, {} where-bindings",
                              form.results.len(), form.wheres.len());
         }
+        Expr::Locals { names, span } => {
+            let names_str: Vec<&str> = names.iter().map(|l| l.name.as_str()).collect();
+            let _ = writeln!(out, "{indent}Locals {{: {} :}} @ {}",
+                             names_str.join(" "), span_str(span));
+        }
     }
 }
 

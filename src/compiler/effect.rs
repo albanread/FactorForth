@@ -846,6 +846,13 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
             // data stack.
             Effect::known(0, 0)
         }
+
+        Expr::Locals { names, .. } => {
+            // A mid-body `{: a b c :}` block consumes one stack item
+            // per name (binding the rightmost first, top of stack) —
+            // net effect ( n -- 0 ).
+            Effect::known(names.len() as u32, 0)
+        }
     }
 }
 

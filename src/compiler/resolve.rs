@@ -653,15 +653,21 @@ pub fn resolve_with_prior_and_values_and_classes(
     for item in &prog.items {
         match item {
             Item::Definition(d) => {
-                // A `:` body with no `{: … :}` block sees an empty
-                // locals scope; a definition that declared locals
-                // builds the set here and resolve_exprs shadows on it.
-                if d.locals.is_empty() {
+                // Build the locals scope as the UNION of
+                //   * head-of-body locals (`Definition.locals`)
+                //   * every mid-body `{: … :}` block's names
+                // Collecting them up front keeps resolve simple: one
+                // scope per def, valid throughout the body (a slight
+                // relaxation of strict lexical order — the user just
+                // writes their locals declarations in order, which is
+                // the natural thing).
+                let mut scope: std::collections::HashSet<String> = d.locals.iter()
+                    .map(|l| l.name.to_ascii_lowercase())
+                    .collect();
+                collect_body_locals(&d.body, &mut scope);
+                if scope.is_empty() {
                     resolve_exprs(&d.body, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
                 } else {
-                    let scope: std::collections::HashSet<String> = d.locals.iter()
-                        .map(|l| l.name.to_ascii_lowercase())
-                        .collect();
                     resolve_exprs(&d.body, &builtins, &combined, &combined_values, &scope, &mut word_targets)?;
                 }
             }
@@ -713,6 +719,43 @@ pub fn resolve_with_prior_and_values_and_classes(
     // Return only THIS compile's new names — the host merges into
     // its persistent dictionary.
     Ok(Resolved { program: prog, word_targets, user_words })
+}
+
+/// Walk an expression tree and add every mid-body `{: … :}` block's
+/// names to `scope`.  Used by `resolve_with_prior_*` to build the
+/// union-scope for a definition's body in one pass before
+/// `resolve_exprs` is called.
+fn collect_body_locals(exprs: &[Expr], scope: &mut std::collections::HashSet<String>) {
+    for e in exprs {
+        match e {
+            Expr::Locals { names, .. } => {
+                for l in names {
+                    scope.insert(l.name.to_ascii_lowercase());
+                }
+            }
+            Expr::If { then_body, else_body, .. } => {
+                collect_body_locals(then_body, scope);
+                if let Some(eb) = else_body { collect_body_locals(eb, scope); }
+            }
+            Expr::BeginUntil { body, .. }
+            | Expr::BeginAgain { body, .. }
+            | Expr::DoLoop { body, .. } => {
+                collect_body_locals(body, scope);
+            }
+            Expr::BeginWhileRepeat { pred, body, .. } => {
+                collect_body_locals(pred, scope);
+                collect_body_locals(body, scope);
+            }
+            Expr::Case { arms, default, .. } => {
+                for arm in arms {
+                    collect_body_locals(&arm.match_expr, scope);
+                    collect_body_locals(&arm.body, scope);
+                }
+                if let Some(d) = default { collect_body_locals(d, scope); }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn resolve_exprs(
@@ -820,6 +863,12 @@ fn resolve_exprs(
                 // references (only operators and built-in function
                 // names that the let_lang codegen resolves itself).
                 // No resolver work needed.
+            }
+            Expr::Locals { .. } => {
+                // Mid-body `{: … :}` block.  Its names are already
+                // in the locals scope (the caller builds the union
+                // up front before walking) — no per-WordRef work to
+                // do here; emit lowers each name to a `:>` binding.
             }
         }
     }
