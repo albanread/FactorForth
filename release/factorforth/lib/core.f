@@ -127,3 +127,79 @@ METHOD: cmp ( a b:object -- n )
 \ pass through unchanged if it isn't one.
 : upcase-char   ( c -- c' )  dup char-lower? if 32 - then ;
 : downcase-char ( c -- c' )  dup char-upper? if 32 + then ;
+
+\ ── Functional combinators ────────────────────────────────────────
+\
+\ A pocket toolkit for the "apply this xt to a stack value (or
+\ values) and either restore or stack the result" patterns.  These
+\ are Factor's combinator family, rendered in ANS Forth on top of
+\ our `call1` / `call2` / `call1>` / `call2>` runtime primitives,
+\ and named the same as the originals so anyone coming from Factor
+\ reads them at sight.
+\
+\ Two flavours per combinator: the *plain* form (xt has no output
+\ — keeps the original on top), and the `>` form (xt produces one
+\ output — stacks the result above the original).  Pick the
+\ flavour that matches your xt's stack effect.
+\
+\ Why combinators when locals already work?  For SHORT patterns
+\ they read like a single sentence:
+\
+\     5 ' show ' show-ln bi          ( show 5, then show-ln 5 )
+\     pos vel ' . bi@                ( . each of pos and vel )
+\
+\ Versus the locals form `: foo ... {: x :} x show x show-ln ;`,
+\ which is more typing for the same intent.  Use combinators when
+\ the body is one line; use locals when it sprawls.
+\
+\ ── keep / 2keep — call an xt with values; restore them ──────────
+
+\ All combinators bind every input as a local so the locals count
+\ matches the declared effect (our emitter uses `locals.len()` as
+\ the input count for the `::` form).  The bodies then push the
+\ values back as needed — cleaner than the `dup … swap …` stack
+\ dance, and obviously re-entrant.
+
+\ keep ( x xt -- x ) — call `xt ( x -- )`; x remains on top.
+: keep ( x xt -- x ) {: x xt :}
+    x xt call1  x ;
+
+\ keep> ( x xt -- y x ) — call `xt ( x -- y )`; result above x.
+\ Useful when you want the rendering AND the original of the same
+\ value, e.g. for diffing or logging.
+: keep> ( x xt -- y x ) {: x xt :}
+    x xt call1>  x ;
+
+\ 2keep ( x y xt -- x y ) — call `xt ( x y -- )`; both preserved.
+: 2keep ( x y xt -- x y ) {: x y xt :}
+    x y xt call2  x y ;
+
+\ ── bi / bi> — apply two xts to the same value ───────────────────
+
+\ bi ( x p q -- ) — call `p ( x -- )` then `q ( x -- )`.
+\ Useful for "do two side-effects on the same value", e.g.
+\ `5 ' show ' show-ln bi`.
+: bi ( x p q -- ) {: x p q :}
+    x p call1  x q call1 ;
+
+\ bi> ( x p q -- a b ) — both xts produce a value; results stacked
+\ left to right (a is the result of p, b of q).
+: bi> ( x p q -- a b ) {: x p q :}
+    x p call1>  x q call1> ;
+
+\ ── bi@ / bi* — same xt to two values, or two xts to two ─────────
+
+\ bi@ ( x y q -- ) — apply the SAME xt `q ( v -- )` to each of x
+\ and y, in order (x first, then y).
+: bi@ ( x y q -- ) {: x y q :}
+    x q call1  y q call1 ;
+
+\ bi* ( x y p q -- ) — apply DIFFERENT xts: p to x, q to y.
+: bi* ( x y p q -- ) {: x y p q :}
+    x p call1  y q call1 ;
+
+\ ── tri — three-way apply ────────────────────────────────────────
+
+\ tri ( x p q r -- ) — apply p, q, r in order, all to x.
+: tri ( x p q r -- ) {: x p q r :}
+    x p call1  x q call1  x r call1 ;
