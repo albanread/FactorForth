@@ -102,3 +102,28 @@ METHOD: cmp ( a b:object -- n )
 
 \ `greater ( a b -- x )` — the one that sorts last (a on a tie).
 : greater ( a b -- x )  2dup after?  if drop else nip then ;
+
+\ ── Character predicates and case (ASCII) ─────────────────────────
+\
+\ One-liners over ASCII code ranges.  No locale awareness; for app
+\ code that needs Unicode, route through the managed-string vocab.
+\
+\ char-upper? / char-lower?  case-class test
+\ letter-char?                upper OR lower
+\ digit-char?                 '0'..'9'
+\ alphanumeric-char?          letter OR digit
+\ whitespace-char?            space, tab, CR, LF
+
+: char-upper? ( c -- ? )  dup 'A' >= swap 'Z' <= and ;
+: char-lower? ( c -- ? )  dup 'a' >= swap 'z' <= and ;
+: letter-char? ( c -- ? )  dup char-upper? swap char-lower? or ;
+: digit-char? ( c -- ? )  dup '0' >= swap '9' <= and ;
+: alphanumeric-char? ( c -- ? )  dup letter-char? swap digit-char? or ;
+: whitespace-char? ( c -- ? )
+    dup ' ' =   over '\t' =  or
+    over '\n' = or  swap '\r' = or ;
+
+\ upcase-char / downcase-char — case-flip a single ASCII letter, or
+\ pass through unchanged if it isn't one.
+: upcase-char   ( c -- c' )  dup char-lower? if 32 - then ;
+: downcase-char ( c -- c' )  dup char-upper? if 32 + then ;
