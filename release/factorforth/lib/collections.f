@@ -310,43 +310,39 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 
 \ `sorted? ( c -- ? )` — is the collection in non-decreasing `cmp`
 \ order?  Walks adjacent pairs; starts true and is cleared by the first
-\ inversion (vacuously true for size 0 or 1).
-0 VALUE srt?-c
-0 VALUE srt?-ok
-: sorted? ( c -- ? )
-    TO srt?-c  -1 TO srt?-ok
-    srt?-c size 1 ?do
-        i 1- srt?-c at   i srt?-c at   cmp 0>     \ c[i-1] sorts after c[i]?
-        if  0 TO srt?-ok  then
-    loop
-    srt?-ok ;
+\ inversion (vacuously true for size 0 or 1).  Accumulator lives on
+\ the data stack; per-pair "no inversion" is folded in with `and`.
+: sorted? ( c -- ? ) {: c :}
+    -1
+    c size 1 ?do
+        i 1- c at  i c at  cmp 0> 0=               \ not inverted ?
+        and
+    loop ;
 
 \ `sort ( c -- )` — sort the collection IN PLACE by `cmp`.  Insertion
 \ sort: simple and obviously correct, O(n^2), fine for the small
 \ in-memory collections these protocols target.  Mutates via at!, so
 \ the collection must be writable at every index (grid and darray are).
 \
-\ `srt-continue?` is split out so the loop guard can short-circuit:
-\ ANS `and` is not lazy, so testing `c[j-1]` while j could be 0 would
-\ read index -1.  The IF guards that read behind the j>0 test.
-0 VALUE srt-c
-0 VALUE srt-key
-VARIABLE srt-j
-: srt-continue? ( -- ? )                          \ j > 0  AND  c[j-1] after key
-    srt-j @ 0 > if
-        srt-j @ 1- srt-c at  srt-key  cmp 0>
-    else 0 then ;
-: sort ( c -- )
-    TO srt-c
-    srt-c size 1 ?do
-        i srt-c at TO srt-key                      \ key := c[i]
-        i srt-j !                                  \ j   := i
-        begin srt-continue? while
-            srt-j @ 1- srt-c at  srt-j @ srt-c at!  \ c[j] := c[j-1]  (shift right)
-            srt-j @ 1- srt-j !                      \ j--
-        repeat
-        srt-key srt-j @ srt-c at!                  \ c[j] := key
-    loop ;
+\ Inner shift loop is its own word `insert-at-i`: each call gets a
+\ fresh set of locals (c, i, key), so sort is fully re-entrant — even
+\ a `cmp` method that recursively sorts another collection is safe.
+\ The cursor j stays on the data stack, never in a shared variable.
+: insert-at-i ( c i -- ) {: c i :}
+    i c at {: key :}                                \ key := c[i]
+    i                                               \ j := i  (stack)
+    begin
+        dup 0> if
+            dup 1- c at   key cmp 0>                \ j > 0  AND  c[j-1] > key
+        else 0 then
+    while
+        dup 1- c at   over c at!                    \ c[j] := c[j-1]
+        1-                                          \ j--
+    repeat
+    key swap c at! ;                                \ c[j] := key
+
+: sort ( c -- ) {: c :}
+    c size 1 ?do  c i insert-at-i  loop ;
 
 \ ── Convenience accessors over the collection protocol ───────────
 \
@@ -375,16 +371,13 @@ VARIABLE srt-j
 \ from the source in descending order.  For a grid (`new-like` gives
 \ a fully-allocated zeroed backing) write order is unconstrained;
 \ this same loop just happens to be in ascending dest order.
-0 VALUE rev-c
-0 VALUE rev-dst
-: reverse ( c -- d )
-    TO rev-c
-    rev-c new-like TO rev-dst
-    rev-c size 0 ?do
-        rev-c size 1- i -  rev-c at                \ x := c[size-1-i]   ( x )
-        i rev-dst at!                              \ d[i] := x          ( )
+: reverse ( c -- d ) {: c :}
+    c new-like {: dst :}
+    c size 0 ?do
+        c size 1- i -  c at                        \ x := c[size-1-i]   ( x )
+        i dst at!                                  \ d[i] := x          ( )
     loop
-    rev-dst ;
+    dst ;
 
 \ ── Positional iteration: each-index / map-index ────────────────────
 \
