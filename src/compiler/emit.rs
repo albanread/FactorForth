@@ -110,7 +110,12 @@ pub fn vocabs_needed(s: &Sema) -> Vec<&'static str> {
         super::ast::Item::Method(m)
         if !matches!(m.kind, super::ast::MethodKind::Primary)
     ));
-    if has_aux_methods {
+    // Forth-2012 `{: … :}` locals on a `:` body also lower to
+    // Factor's `::` form, so the same `locals` USING covers it.
+    let has_def_locals = s.program.items.iter().any(|i| matches!(i,
+        super::ast::Item::Definition(d) if !d.locals.is_empty()
+    ));
+    if has_aux_methods || has_def_locals {
         set.insert("locals");
     }
     for t in s.word_targets.values() {
@@ -987,6 +992,14 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
     let factor_name = super::resolve::factor_user_name(
         &d.name.to_ascii_lowercase(),
     );
+    // Forth-2012 `{: … :}` locals are lowered to Factor's `::`
+    // form, where the input slots of the effect annotation become
+    // the lexical bindings.  Each call gets its own frame, so the
+    // protocol algorithms become re-entrant-safe.
+    if !d.locals.is_empty() {
+        emit_definition_with_locals(d, r, &factor_name, out);
+        return;
+    }
     write!(out, ": {} ", factor_name).unwrap();
     // Factor's `:` REQUIRES a stack-effect annotation.  Picking
     // which one to emit follows the principle that synth is
@@ -1105,6 +1118,78 @@ fn emit_definition(d: &Definition, r: &Sema, out: &mut String) {
 // tail-inlining transform took over — emit.rs now calls
 // `lower_exit::body_uses_exit` on the *lowered* body to decide
 // whether the with-return fallback wrap is still required.
+
+/// Emit a `:` definition that declared Forth-2012 `{: … :}` locals
+/// as a Factor `:: name ( local1 local2 … -- output-names ) body ;`
+/// form.  The local names become the lexical bindings on every call,
+/// which is the whole point — no global VALUE scratch that gets
+/// clobbered on re-entry.
+///
+/// Effect annotation: input slots are the user's local names (the
+/// `( a b -- … )` comment's input names are discarded because they're
+/// documentation, not bindings).  Output slot names come from the
+/// declared annotation when present; otherwise we synthesise
+/// `r0 r1 …`, or fall back to a row variable `..b` when the body's
+/// effect is `Unknown`.
+fn emit_definition_with_locals(d: &Definition, r: &Sema, factor_name: &str, out: &mut String) {
+    write!(out, ":: {factor_name} ( ").unwrap();
+    // Inputs: the lexical locals, in declaration order.
+    for l in &d.locals {
+        let n = l.name.to_ascii_lowercase();
+        let safe = if n.contains('.') { n.replace('.', "_") } else { n };
+        out.push_str(&safe);
+        out.push(' ');
+    }
+    out.push_str("-- ");
+    // Outputs: declared names when present (sanitised), otherwise the
+    // synth count → `r0 r1 …`, otherwise row var.
+    let lc = d.name.to_ascii_lowercase();
+    let synth = r.body_effects.get(&lc).copied();
+    let n_locals = d.locals.len() as u32;
+    if let Some(eff) = &d.effect {
+        // If declared input count doesn't match the locals, the synth
+        // would have caught the body-side discrepancy already; we
+        // still honour the locals for the bindings.  Output names
+        // come straight from the user.
+        for s in &eff.outputs {
+            let safe = if s == "..." {
+                "_dots_".to_string()
+            } else if s.contains('.') {
+                s.replace('.', "_")
+            } else { s.clone() };
+            out.push_str(&safe);
+            out.push(' ');
+        }
+        if eff.outputs.is_empty() { out.push(' '); }
+    } else if let Some(super::effect::Effect::Known { inputs, outputs }) = synth {
+        // No declared effect: synthesise output names.  If the synth
+        // input count disagrees with the locals count, trust the
+        // locals (that's what was actually bound) and emit the synth
+        // output count alongside.
+        let _ = inputs;
+        for i in 0..outputs {
+            write!(out, "r{i} ").unwrap();
+        }
+        if outputs == 0 { out.push(' '); }
+    } else {
+        // Synth Unknown and no declaration — use a row variable so
+        // Factor accepts the def even if the output count is
+        // unknowable.  Combined with our concrete input locals this
+        // still lets callers compose against it.
+        out.push_str("..b ");
+    }
+    let _ = n_locals;
+    out.push_str(") ");
+    // Body emit + EXIT fallback wrap (identical to the non-locals path).
+    if super::lower_exit::body_uses_exit(&d.body, &r.word_targets) {
+        out.push_str("[ ");
+        emit_exprs(&d.body, r, out);
+        out.push_str(" ] continuations:with-return");
+    } else {
+        emit_exprs(&d.body, r, out);
+    }
+    out.push_str(" ;");
+}
 
 /// Render `(inputs -- outputs)` with synthetic item names (a, b, c…
 /// for inputs; r0, r1, … for outputs).  The names don't carry

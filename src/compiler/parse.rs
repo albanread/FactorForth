@@ -535,6 +535,47 @@ impl<'t> Parser<'t> {
             // skip_comments handle it in the body loop.
         }
 
+        // Optional Forth-2012 `{: name1 name2 :}` locals declaration.
+        // Sits between the effect annotation and the body, just like
+        // the standard says.  The names will become lexical locals
+        // that the body references — emit lowers the whole def to
+        // Factor's `::` form so each call gets its own bindings
+        // (re-entrant-safe, unlike a VALUE-as-scratch idiom).
+        let mut locals: Vec<LocalDecl> = Vec::new();
+        self.skip_comments();
+        if let Some(Token { kind: Tok::Word(w), .. }) = self.peek() {
+            if w == "{:" {
+                let open_span = self.peek().unwrap().span;
+                self.bump();                     // consume `{:`
+                loop {
+                    self.skip_comments();
+                    let Some(t) = self.peek() else {
+                        return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                    };
+                    match &t.kind {
+                        Tok::Word(w) if w == ":}" => { self.bump(); break; }
+                        Tok::Word(w) if w == ";" || w == ":" || w == "{:" => {
+                            // Unterminated locals block — body started
+                            // before we saw `:}`.
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        }
+                        Tok::Word(name) => {
+                            let span = t.span;
+                            locals.push(LocalDecl { name: name.clone(), name_span: span });
+                            self.bump();
+                        }
+                        _ => {
+                            // Numbers, strings, etc. inside the locals
+                            // list are a syntax error.  Use the
+                            // unterminated-def error for now; refine
+                            // when we have a dedicated variant.
+                            return Err(ParseError::UnterminatedDefinition { opened_at: open_span });
+                        }
+                    }
+                }
+            }
+        }
+
         // Body expressions until `;`.
         let mut body: Vec<Expr> = Vec::new();
         let end_span;
@@ -589,7 +630,7 @@ impl<'t> Parser<'t> {
         }
         // Default: regular `: name body ;` definition.
         Ok(ColonResult::Def(Definition {
-            name, name_span, effect, body, span,
+            name, name_span, effect, locals, body, span,
         }))
     }
 

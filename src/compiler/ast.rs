@@ -407,10 +407,26 @@ pub struct Definition {
     /// without one (just a regular block comment), but we strongly
     /// prefer them and the formatter/linter will warn when absent.
     pub effect: Option<StackEffect>,
+    /// Forth-2012 `{: name1 name2 :}` locals declared at the head of
+    /// the body.  Each binds the corresponding input position
+    /// (deepest-stack-item first) as a lexical local that the body
+    /// references by name — re-entrant-safe by construction.  Empty
+    /// here keeps the def at the plain `: name … ;` shape on emit;
+    /// non-empty switches it to Factor's `::` form internally.
+    pub locals: Vec<LocalDecl>,
     /// Body expressions, in source order.
     pub body: Vec<Expr>,
     /// Span from `:` through the `;`.
     pub span: Span,
+}
+
+/// One Forth-2012 local declared inside a `{: … :}` block.  Carries
+/// source name + span so resolve / effect errors can point at the
+/// right token.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalDecl {
+    pub name: String,
+    pub name_span: Span,
 }
 
 /// One ANS stack-effect annotation: `( a b -- c )`.  May contain

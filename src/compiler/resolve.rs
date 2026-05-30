@@ -34,6 +34,11 @@ pub enum Target {
     QualifiedBuiltin { vocab: &'static str, factor_name: &'static str },
     /// User-defined word from this compilation unit.
     UserDefined { factor_name: String },
+    /// Lexical local bound by the enclosing `:: name (…) … ;`
+    /// (lowered from a Forth `{: … :}` block).  Emitted as the raw
+    /// (lowercased) local name — NOT mangled — so it lines up with
+    /// the binding Factor's `::` parsed from the effect annotation.
+    Local { name: String },
 }
 
 impl Target {
@@ -44,6 +49,7 @@ impl Target {
             Target::QualifiedBuiltin { vocab, factor_name } =>
                 format!("{vocab}:{factor_name}"),
             Target::UserDefined { factor_name } => factor_name.clone(),
+            Target::Local { name } => name.clone(),
         }
     }
 
@@ -55,6 +61,9 @@ impl Target {
             Target::Builtin { vocab, .. } => Some(*vocab),
             Target::QualifiedBuiltin { vocab, .. } => Some(*vocab),
             Target::UserDefined { .. } => None,
+            // Locals are bound in the enclosing `::`; they live in
+            // the current vocab and need no extra USING entry.
+            Target::Local { .. } => None,
         }
     }
 }
@@ -639,23 +648,37 @@ pub fn resolve_with_prior_and_values_and_classes(
 
     // Pass 2: resolve every WordRef in every body and at top level.
     let mut word_targets: HashMap<Span, Target> = HashMap::new();
+    // Empty locals scope reused for every item that doesn't bind any.
+    let no_locals: std::collections::HashSet<String> = std::collections::HashSet::new();
     for item in &prog.items {
         match item {
-            Item::Definition(d) => resolve_exprs(&d.body, &builtins, &combined, &combined_values, &mut word_targets)?,
-            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &combined, &combined_values, &mut word_targets)?,
+            Item::Definition(d) => {
+                // A `:` body with no `{: … :}` block sees an empty
+                // locals scope; a definition that declared locals
+                // builds the set here and resolve_exprs shadows on it.
+                if d.locals.is_empty() {
+                    resolve_exprs(&d.body, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
+                } else {
+                    let scope: std::collections::HashSet<String> = d.locals.iter()
+                        .map(|l| l.name.to_ascii_lowercase())
+                        .collect();
+                    resolve_exprs(&d.body, &builtins, &combined, &combined_values, &scope, &mut word_targets)?;
+                }
+            }
+            Item::TopLevel { exprs, .. } => resolve_exprs(exprs, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?,
             // Computed-value CONSTANT/FCONSTANT bodies contain user-
             // visible word references (e.g. `3.5e 240e f/ FCONSTANT
             // mb-dx` references `f/`).  Resolve them too.  Literal-
             // valued constants have no body to walk.
             Item::Constant(c) => {
                 if let crate::compiler::ast::ConstValue::Computed(exprs) = &c.value {
-                    resolve_exprs(exprs, &builtins, &combined, &combined_values, &mut word_targets)?;
+                    resolve_exprs(exprs, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
                 }
             }
             // VALUE has an initial-value body — resolve any word
             // references in there too.
             Item::Value(v) => {
-                resolve_exprs(&v.initial, &builtins, &combined, &combined_values, &mut word_targets)?;
+                resolve_exprs(&v.initial, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
             }
             // Variable, Create, Collection carry no expressions to
             // resolve — their bodies are AST-level data, not user-
@@ -665,8 +688,8 @@ pub fn resolve_with_prior_and_values_and_classes(
             // which may reference builtins.  Walk them so resolve
             // catches typos.
             Item::Template(t) => {
-                resolve_exprs(&t.constructor, &builtins, &combined, &combined_values, &mut word_targets)?;
-                resolve_exprs(&t.does_body,   &builtins, &combined, &combined_values, &mut word_targets)?;
+                resolve_exprs(&t.constructor, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
+                resolve_exprs(&t.does_body,   &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
             }
             // Template instances inherit the resolved does_body
             // from their source template; no separate resolution.
@@ -677,8 +700,12 @@ pub fn resolve_with_prior_and_values_and_classes(
             Item::Class(_) | Item::Generic(_) | Item::RawFactor(_)
             | Item::Needs { .. } => {}
             // Method body resolves like a `:` body — same rules.
+            // Methods don't yet support `{: … :}` locals; the
+            // specializer-bound input names already act as bindings
+            // via Factor's multi-methods machinery, and the lib so
+            // far hasn't needed extras here.
             Item::Method(m) => {
-                resolve_exprs(&m.body, &builtins, &combined, &combined_values, &mut word_targets)?;
+                resolve_exprs(&m.body, &builtins, &combined, &combined_values, &no_locals, &mut word_targets)?;
             }
         }
     }
@@ -693,6 +720,7 @@ fn resolve_exprs(
     builtins: &HashMap<&'static str, Target>,
     user_words: &HashMap<String, Span>,
     value_names: &HashMap<String, Span>,
+    locals: &std::collections::HashSet<String>,
     out: &mut HashMap<Span, Target>,
 ) -> Result<(), ResolveError> {
     for e in exprs {
@@ -700,9 +728,15 @@ fn resolve_exprs(
             Expr::Lit(_) => {}
             Expr::WordRef { name, span } => {
                 let lc = name.to_ascii_lowercase();
-                // User-defined wins over builtins for the same name —
-                // ANS Forth's "most recent definition wins" rule.
-                if user_words.contains_key(&lc) {
+                // Lexical locals (from a `{: … :}` declaration on the
+                // enclosing colon-def) shadow ALL other names — same
+                // rule any sensible language has.  Emitted raw so the
+                // Factor-side `::` binding matches.
+                if locals.contains(&lc) {
+                    out.insert(*span, Target::Local { name: lc });
+                } else if user_words.contains_key(&lc) {
+                    // User-defined wins over builtins for the same name —
+                    // ANS Forth's "most recent definition wins" rule.
                     out.insert(*span, Target::UserDefined {
                         factor_name: factor_user_name(&lc),
                     });
@@ -734,29 +768,29 @@ fn resolve_exprs(
                 // friendly "unknown word" rather than failing compile).
             }
             Expr::If { then_body, else_body, .. } => {
-                resolve_exprs(then_body, builtins, user_words, value_names, out)?;
+                resolve_exprs(then_body, builtins, user_words, value_names, locals, out)?;
                 if let Some(eb) = else_body {
-                    resolve_exprs(eb, builtins, user_words, value_names, out)?;
+                    resolve_exprs(eb, builtins, user_words, value_names, locals, out)?;
                 }
             }
             Expr::BeginUntil { body, .. } |
             Expr::BeginAgain { body, .. } => {
-                resolve_exprs(body, builtins, user_words, value_names, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, locals, out)?;
             }
             Expr::BeginWhileRepeat { pred, body, .. } => {
-                resolve_exprs(pred, builtins, user_words, value_names, out)?;
-                resolve_exprs(body, builtins, user_words, value_names, out)?;
+                resolve_exprs(pred, builtins, user_words, value_names, locals, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, locals, out)?;
             }
             Expr::DoLoop { body, .. } => {
-                resolve_exprs(body, builtins, user_words, value_names, out)?;
+                resolve_exprs(body, builtins, user_words, value_names, locals, out)?;
             }
             Expr::Case { arms, default, .. } => {
                 for arm in arms {
-                    resolve_exprs(&arm.match_expr, builtins, user_words, value_names, out)?;
-                    resolve_exprs(&arm.body, builtins, user_words, value_names, out)?;
+                    resolve_exprs(&arm.match_expr, builtins, user_words, value_names, locals, out)?;
+                    resolve_exprs(&arm.body, builtins, user_words, value_names, locals, out)?;
                 }
                 if let Some(d) = default {
-                    resolve_exprs(d, builtins, user_words, value_names, out)?;
+                    resolve_exprs(d, builtins, user_words, value_names, locals, out)?;
                 }
             }
             Expr::Tick { name, span } => {
@@ -765,7 +799,11 @@ fn resolve_exprs(
                 // word.  The resolved target is recorded against
                 // this span so emit can render `\ <factor-name>`.
                 let lc = name.to_ascii_lowercase();
-                if user_words.contains_key(&lc) {
+                if locals.contains(&lc) {
+                    // Tick on a local — odd but well-defined: emit the
+                    // raw local name; Factor's `::` will pick it up.
+                    out.insert(*span, Target::Local { name: lc });
+                } else if user_words.contains_key(&lc) {
                     out.insert(*span, Target::UserDefined {
                         factor_name: factor_user_name(&lc),
                     });

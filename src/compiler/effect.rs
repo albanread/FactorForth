@@ -703,11 +703,15 @@ fn effect_of_expr(e: &Expr, env: &Env) -> Effect {
 
         Expr::WordRef { name, span } => {
             let lc = name.to_ascii_lowercase();
-            // User-defined takes precedence (resolve guaranteed
-            // that's what was bound).
+            // Resolve already decided what kind of name this is.
             if let Some(t) = env.resolved.word_targets.get(span) {
-                if matches!(t, Target::UserDefined { .. }) {
-                    return env.user_effects.get(&lc).copied().unwrap_or(Effect::Unknown);
+                match t {
+                    // A reference to a `{: … :}` local just pushes
+                    // its bound value — same shape as a literal.
+                    Target::Local { .. } => return Effect::known(0, 1),
+                    Target::UserDefined { .. } =>
+                        return env.user_effects.get(&lc).copied().unwrap_or(Effect::Unknown),
+                    _ => {}
                 }
             }
             env.builtins.get(lc.as_str()).copied().unwrap_or(Effect::Unknown)
@@ -851,7 +855,16 @@ fn check_definition(d: &Definition, body_eff: Effect, errors: &mut Vec<EffectErr
     let Some(se) = &d.effect else { return; };
     let declared = (se.inputs.len() as u32, se.outputs.len() as u32);
     let Effect::Known { inputs: bi, outputs: bo } = body_eff else { return; };
-    let inferred = (bi, bo);
+    // For a `{: … :}` locals def the body never sees the inputs on
+    // the data stack — they're bound to the locals before the body
+    // runs — so body_eff's input count is structurally 0.  Compare
+    // outputs only in that case; the declared input count is taken
+    // as ground truth (it matches the locals declaration).
+    let inferred = if d.locals.is_empty() {
+        (bi, bo)
+    } else {
+        (declared.0, bo)
+    };
     // ANS-strict comparison: net change must match.  We compare
     // both inputs and outputs separately, since an inputs mismatch
     // is its own ANS-meaningful problem.
