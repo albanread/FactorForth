@@ -387,25 +387,18 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \
 \ each-index xt: ( i x -- )           map-index xt: ( i x -- y )
 
-0 VALUE eai-c
-0 VALUE eai-xt
-: each-index ( c xt -- )
-    TO eai-xt  TO eai-c
-    eai-c size 0 ?do
-        i  i eai-c at  eai-xt call2
+: each-index ( c xt -- ) {: c xt :}
+    c size 0 ?do
+        i  i c at  xt call2
     loop ;
 
-0 VALUE mi-c
-0 VALUE mi-xt
-0 VALUE mi-dst
-: map-index ( c xt -- d )
-    TO mi-xt  TO mi-c
-    mi-c new-like TO mi-dst
-    mi-c size 0 ?do
-        i  i mi-c at  mi-xt call2>             \ y := xt(i, c[i])
-        i mi-dst at!                           \ d[i] := y
+: map-index ( c xt -- d ) {: c xt :}
+    c new-like {: dst :}
+    c size 0 ?do
+        i  i c at  xt call2>                   \ y := xt(i, c[i])
+        i dst at!                              \ d[i] := y
     loop
-    mi-dst ;
+    dst ;
 
 \ ── reduce — fold without an explicit init ─────────────────────────
 \
@@ -415,16 +408,11 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \
 \ reduce xt: ( acc x -- acc )
 
-0 VALUE rdc-c
-0 VALUE rdc-xt
-0 VALUE rdc-acc
-: reduce ( c xt -- x )
-    TO rdc-xt  TO rdc-c
-    0 rdc-c at TO rdc-acc                      \ seed := c[0]
-    rdc-c size 1 ?do
-        rdc-acc  i rdc-c at  rdc-xt call2>  TO rdc-acc
-    loop
-    rdc-acc ;
+: reduce ( c xt -- x ) {: c xt :}
+    0 c at                                     \ seed := c[0]  (acc on stack)
+    c size 1 ?do
+        i c at  xt call2>                      \ acc := xt(acc, c[i])
+    loop ;
 
 \ ── partition — split into matching / non-matching ─────────────────
 \
@@ -432,20 +420,15 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \ as a pair of darrays — saves a second pass for `filter` + an
 \ inverted-predicate filter.  Result is two darrays in matching order.
 
-0 VALUE prt-c
-0 VALUE prt-xt
-0 VALUE prt-yes
-0 VALUE prt-no
-: partition ( c xt -- yes no )
-    TO prt-xt  TO prt-c
-    new-darray TO prt-yes
-    new-darray TO prt-no
-    prt-c size 0 ?do
-        i prt-c at                              \ x
-        dup prt-xt call1>                       \ x ?
-        if  prt-yes d-push  else  prt-no d-push  then
+: partition ( c xt -- yes no ) {: c xt :}
+    new-darray {: yes :}
+    new-darray {: no :}
+    c size 0 ?do
+        i c at                                  \ x
+        dup xt call1>                           \ x ?
+        if  yes d-push  else  no d-push  then
     loop
-    prt-yes prt-no ;
+    yes no ;
 
 \ ── take / skip — prefix / suffix slicing ──────────────────────────
 \
@@ -457,45 +440,33 @@ METHOD: clone ( s:set -- copy ) set>data (clone) <set> ;
 \ honest representation).  Both clamp to `size`: `take` of more than
 \ exists returns the whole sequence, `skip` of more returns empty.
 
-0 VALUE tk-c
-0 VALUE tk-n
-0 VALUE tk-dst
-: take ( c n -- d )
-    TO tk-n  TO tk-c
-    new-darray TO tk-dst
-    tk-n tk-c size min 0 ?do
-        i tk-c at  tk-dst d-push
+: take ( c n -- d ) {: c n :}
+    new-darray {: dst :}
+    n c size min 0 ?do
+        i c at  dst d-push
     loop
-    tk-dst ;
+    dst ;
 
-0 VALUE sk-c
-0 VALUE sk-n
-0 VALUE sk-dst
-: skip ( c n -- d )
-    TO sk-n  TO sk-c
-    new-darray TO sk-dst
+: skip ( c n -- d ) {: c n :}
+    new-darray {: dst :}
     \ Clamp n to size so `?do` doesn't get start > limit (which on
     \ ANS Forth would run the body anyway with the supplied index,
     \ leading to out-of-bounds reads on `at`).
-    sk-c size   sk-n sk-c size min   ?do
-        i sk-c at  sk-dst d-push
+    c size   n c size min   ?do
+        i c at  dst d-push
     loop
-    sk-dst ;
+    dst ;
 
 \ ── concat — append two collections into a fresh darray ────────────
 \
 \ Same convention: the result is a darray regardless of input shapes,
 \ because two grids of different sizes don't add up to a grid.
 
-0 VALUE cat-a
-0 VALUE cat-b
-0 VALUE cat-dst
-: concat ( a b -- c )
-    TO cat-b  TO cat-a
-    new-darray TO cat-dst
-    cat-a size 0 ?do  i cat-a at  cat-dst d-push  loop
-    cat-b size 0 ?do  i cat-b at  cat-dst d-push  loop
-    cat-dst ;
+: concat ( a b -- c ) {: a b :}
+    new-darray {: dst :}
+    a size 0 ?do  i a at  dst d-push  loop
+    b size 0 ?do  i b at  dst d-push  loop
+    dst ;
 
 \ ── Set algebra ────────────────────────────────────────────────────
 \
